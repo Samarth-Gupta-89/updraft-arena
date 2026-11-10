@@ -46,7 +46,7 @@ The game is one Node server. Whoever can reach that server can play.
 | Tab | Scoreboard |
 | Esc | Free the mouse |
 
-Each gun holds 20 shots. Glowing pads on the map refill +10 (cyan = Lifter, amber = Shover) and come back 12 s after pickup. You respawn with full ammo and 2 s of spawn protection (shown as a bubble; it ends when you shoot).
+Each gun holds 30 shots. Glowing pads on the map refill +15 (cyan = Lifter, amber = Shover; green = 2 air dashes, used with Shift while in the air) and come back 12 s after pickup. You respawn with full ammo and 2 s of spawn protection (shown as a bubble; it ends when you shoot).
 
 Rough numbers: 3 quick Lifter hits put someone just above the 4.5 m wall; a Shover hit then carries them about 10 m.
 

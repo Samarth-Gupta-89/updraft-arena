@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import {
-  SPAWNS, DM_SPAWNS, PICKUPS, MAX_AMMO, PICKUP_AMOUNT, PICKUP_RESPAWN_MS, PICKUP_RADIUS,
+  SPAWNS, DM_SPAWNS, PICKUPS, MAX_AMMO, maxOf, giveOf, fullAmmo, PICKUP_RESPAWN_MS, PICKUP_RADIUS,
   KILL_Y, GUNS, MATCH, MODES, DM_COLORS, heightAt,
 } from './public/js/shared/map.js';
 import { BOT_LEVELS, botName, makeBrain, resetBrain, updateBot } from './bots.js';
@@ -143,7 +143,7 @@ function joinRoom(pl, room) {
     pl.team = null;
     pl.color = DM_COLORS.find((c) => !used.has(c)) || DM_COLORS[0];
   }
-  Object.assign(pl, { kills: 0, deaths: 0, alive: false, away: false, respawnAt: 0, ammo: { L: MAX_AMMO, P: MAX_AMMO }, lastHit: null });
+  Object.assign(pl, { kills: 0, deaths: 0, alive: false, away: false, respawnAt: 0, ammo: fullAmmo(), lastHit: null });
   // someone who dropped out mid-match and came back keeps their score (matched by email)
   const saved = !pl.isBot && room.saved && room.saved.get(pl.email);
   if (saved) {
@@ -210,11 +210,11 @@ function spawn(room, pl) {
   Object.assign(pl, {
     alive: true, respawnAt: 0, lastHit: null, f: 0, ya: s.yaw, pi: 0,
     p: [s.x, heightAt(s.x, s.z) + 0.05, s.z],
-    ammo: { L: MAX_AMMO, P: MAX_AMMO }, protectUntil: t + MATCH.protectMs, prevP: null, v: [0, 0, 0], lastS: t, away: false,
+    ammo: fullAmmo(), protectUntil: t + MATCH.protectMs, prevP: null, v: [0, 0, 0], lastS: t, away: false,
   });
   if (pl.isBot) resetBrain(pl.bot, pl.p, s.yaw);
   broadcast(room, { t: 'spawn', id: pl.id, p: pl.p, ya: s.yaw, prot: MATCH.protectMs });
-  send(pl, { t: 'ammo', L: pl.ammo.L, P: pl.ammo.P });
+  send(pl, { t: 'ammo', L: pl.ammo.L, P: pl.ammo.P, D: pl.ammo.D });
 }
 
 function kill(room, pl) {
@@ -280,10 +280,10 @@ function resolveShot(room, pl, g, o, e, d, tg) {
 }
 
 function takePickup(room, pl, pk) {
-  pl.ammo[pk.type] = Math.min(MAX_AMMO, pl.ammo[pk.type] + PICKUP_AMOUNT);
+  pl.ammo[pk.type] = Math.min(maxOf(pk.type), pl.ammo[pk.type] + giveOf(pk.type));
   pk.active = false;
   pk.respawnAt = now() + PICKUP_RESPAWN_MS;
-  send(pl, { t: 'ammo', L: pl.ammo.L, P: pl.ammo.P });
+  send(pl, { t: 'ammo', L: pl.ammo.L, P: pl.ammo.P, D: pl.ammo.D });
   broadcast(room, { t: 'pk', id: pk.id, a: false, by: pl.id });
 }
 
@@ -291,7 +291,7 @@ function addBot(room, level) {
   const pl = {
     id: nextId++, ws: null, isBot: true, botLevel: level, sex: Math.random() < 0.5 ? 'f' : 'm', name: botName(room), email: null, room: null,
     team: null, color: null, alive: false, p: [0, 0, 0], ya: 0, pi: 0, f: 0, kills: 0, deaths: 0,
-    ammo: { L: MAX_AMMO, P: MAX_AMMO }, bot: makeBrain(level),
+    ammo: fullAmmo(), bot: makeBrain(level),
   };
   joinRoom(pl, room);
 }
@@ -393,6 +393,9 @@ function handle(pl, m) {
       if (p[1] < KILL_Y) kill(room, pl);
       break;
     }
+    case 'dash': // the player used an air dash (the movement itself happens on their side)
+      if (room && pl.alive && pl.ammo.D > 0) pl.ammo.D--;
+      break;
     case 'fell':
       if (room && pl.alive) kill(room, pl);
       break;
@@ -402,7 +405,7 @@ function handle(pl, m) {
       const t = now();
       pl.lastFire = pl.lastFire || { L: 0, P: 0 };
       if (t - pl.lastFire[g] < GUNS[g].interval * 1000 * 0.75) return;
-      if (pl.ammo[g] <= 0) return send(pl, { t: 'ammo', L: pl.ammo.L, P: pl.ammo.P });
+      if (pl.ammo[g] <= 0) return send(pl, { t: 'ammo', L: pl.ammo.L, P: pl.ammo.P, D: pl.ammo.D });
       const o = vec3(m.o), e = vec3(m.e), d = vec3(m.d);
       if (!o || !e || !d) return;
       let tg = m.h ? room.players.get(Number(m.h)) : null;
@@ -414,7 +417,7 @@ function handle(pl, m) {
     case 'pick': {
       if (!room || room.state !== 'playing' || !pl.alive) return;
       const pk = room.pickups.find((x) => x.id === m.id);
-      if (!pk || !pk.active || pl.ammo[pk.type] >= MAX_AMMO) return;
+      if (!pk || !pk.active || pl.ammo[pk.type] >= maxOf(pk.type)) return;
       if (Math.hypot(pl.p[0] - pk.x, pl.p[2] - pk.z) > PICKUP_RADIUS + 1.5) return;
       takePickup(room, pl, pk);
       break;
@@ -426,7 +429,7 @@ function handle(pl, m) {
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 16 * 1024 });
 
 wss.on('connection', (ws) => {
-  const pl = { id: nextId++, ws, name: null, email: null, room: null, team: null, color: null, alive: false, p: [0, 0, 0], ya: 0, pi: 0, f: 0, kills: 0, deaths: 0, ammo: { L: MAX_AMMO, P: MAX_AMMO } };
+  const pl = { id: nextId++, ws, name: null, email: null, room: null, team: null, color: null, alive: false, p: [0, 0, 0], ya: 0, pi: 0, f: 0, kills: 0, deaths: 0, ammo: fullAmmo() };
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
   ws.on('message', (data) => {

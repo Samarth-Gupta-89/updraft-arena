@@ -227,6 +227,13 @@ export class Sfx {
     this.tone(d, 'sine', 1180, 1180, 0.16, 0.3, 0.08);
   }
 
+  dash() {
+    if (!this.ctx) return;
+    const d = this.out(null, 0.7);
+    this.burst(d, 'bandpass', 500, 3200, 0.35, 0.5, 1.2);
+    this.tone(d, 'sawtooth', 180, 520, 0.22, 0.12);
+  }
+
   empty() {
     if (!this.ctx || this.play('sfx/empty', null, 0.6)) return;
     this.burst(this.out(null, 0.5), 'highpass', 3000, 3000, 0.03, 0.3, 1);

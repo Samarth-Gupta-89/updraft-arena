@@ -89,12 +89,13 @@
         <div><kbd>W A S D</kbd> move</div>
         <div><kbd>Space</kbd> jump</div>
         <div><kbd>Shift</kbd> sprint · <kbd>C</kbd> crouch</div>
+        <div><kbd class="dash">Shift</kbd> in the air — AIR DASH (needs the green power-up)</div>
         <div><kbd class="lift">Left click</kbd> LIFTER — launches them up (keeps stacking)</div>
         <div><kbd class="push">Right click</kbd> SHOVER — knocks them back</div>
         <div><kbd>Tab</kbd> scores · <kbd>Esc</kbd> pause (host: add bots)</div>
         <label class="sens">Mouse sensitivity <input id="sens" class="sens-input" type="range" min="6" max="60" step="1"></label>
       </div>
-      <p class="tip">Tip: lift a player above the wall, then shove them over it. Anyone who falls out of the arena is knocked out.</p>
+      <p class="tip">Tip: lift a player above the wall, then shove them over it. Anyone who falls out of the arena is knocked out. Green power-ups in the rooms give air dashes: they can fly you back in.</p>
     </section>
 
     <section id="screen-disconnected" class="screen panel hidden">
@@ -125,15 +126,16 @@
     <div class="gun gun-L">
       <div class="gun-key">LMB</div>
       <div class="gun-name">LIFTER</div>
-      <div class="gun-count"><b id="ammo-L">20</b><span>/20</span></div>
+      <div class="gun-count"><b id="ammo-L">30</b><span>/30</span></div>
       <div class="gun-bar"><span id="bar-L"></span></div>
     </div>
     <div class="gun gun-P">
       <div class="gun-key">RMB</div>
       <div class="gun-name">SHOVER</div>
-      <div class="gun-count"><b id="ammo-P">20</b><span>/20</span></div>
+      <div class="gun-count"><b id="ammo-P">30</b><span>/30</span></div>
       <div class="gun-bar"><span id="bar-P"></span></div>
     </div>
+    <div id="dash"><b id="dash-n">0</b> AIR DASH · <kbd>Shift</kbd> in the air</div>
     <div id="scoreboard" class="hidden"></div>
   </div>
 

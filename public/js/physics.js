@@ -1,5 +1,5 @@
 // Local player movement: terrain + box collisions, water, and knockback from lift/push hits.
-import { PLAYER, PHYS, WATER_LEVEL, heightAt, inArena } from './shared/map.js';
+import { PLAYER, PHYS, DASH, WATER_LEVEL, heightAt, inArena } from './shared/map.js';
 
 const R = PLAYER.radius, H = PLAYER.height, STEP = 0.4;
 
@@ -16,6 +16,24 @@ export class Controller {
     this.crouching = false;
     this.height = H;
     this.events = [];           // 'jump' | 'land:<speed>' | 'splash'
+    this.airT = 0;              // seconds since last on the ground (for coyote jumps)
+    this.jumpBuf = 0;           // seconds a recent jump press stays valid
+    this.jumpHeld = false;
+    this.dashAt = 0;
+  }
+
+  // Air dash: fly along (dx, dz) and up a little. Replaces any knockback, so it can bring you back in.
+  dash(dx, dz) {
+    const now = performance.now();
+    if (this.onGround || this.inWater || now - this.dashAt < DASH.cooldownMs) return false;
+    const l = Math.hypot(dx, dz) || 1;
+    this.kb.x = (dx / l) * DASH.speed;
+    this.kb.z = (dz / l) * DASH.speed;
+    this.mv.x = this.mv.z = 0;
+    this.vy = Math.max(this.vy, 0) * 0.5 + DASH.up;
+    this.floatUntil = 0;
+    this.dashAt = now;
+    return true;
   }
 
   spawn(p) {
@@ -82,7 +100,7 @@ export class Controller {
     const s = Math.sin(yaw), c = Math.cos(yaw);
     const wx = -s * f + c * r, wz = -c * f - s * r;
     const speed = this.inWater ? PHYS.swim : this.crouching ? PHYS.crouchSpeed : (inp.sprint && f > 0.1 ? PHYS.sprint : PHYS.walk);
-    const accel = this.onGround ? 60 : this.inWater ? 18 : 9;
+    const accel = this.onGround ? 70 : this.inWater ? 18 : PHYS.airAccel;
     const tx = wx * speed, tz = wz * speed;
     const dx = tx - this.mv.x, dz = tz - this.mv.z;
     const dl = Math.hypot(dx, dz), maxD = accel * dt;
@@ -102,9 +120,17 @@ export class Controller {
     } else {
       this.vy -= PHYS.gravity * (now < this.floatUntil ? PHYS.liftGravScale : 1) * dt;
     }
-    if (this.onGround && inp.jump && !this.inWater) {
+    // jump: forgiving timing (a press just before landing, or just after running off an edge, still works)
+    if (inp.jump && !this.jumpHeld) this.jumpBuf = PHYS.jumpBufferMs / 1000;
+    this.jumpHeld = !!inp.jump;
+    this.jumpBuf -= dt;
+    this.airT = this.onGround ? 0 : this.airT + dt;
+    const canJump = this.onGround || (this.airT < PHYS.coyoteMs / 1000 && this.vy <= 0);
+    if (canJump && (inp.jump || this.jumpBuf > 0) && !this.inWater) {
       this.vy = PHYS.jumpV;
       this.onGround = false;
+      this.airT = 1;
+      this.jumpBuf = 0;
       this.events.push('jump');
     }
 

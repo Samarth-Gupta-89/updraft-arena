@@ -121,7 +121,7 @@ export function buildWorld(renderer, scene) {
 
   // ---------------------------------------------------------------- cover (merged per material)
   {
-    const crates = [], conts = [], posts = [], barriers = [], rocks = [], trunks = [], leaves = [];
+    const crates = [], conts = [], posts = [], barriers = [], rocks = [], trunks = [], leaves = [], blocks = [];
     const CONT_COLORS = [0x9b3b2b, 0x2f5f8f, 0x3f7350, 0xb98a35];
     let rockSeed = 1;
     for (const c of colliders) {
@@ -146,6 +146,9 @@ export function buildWorld(renderer, scene) {
         if (ref.w > ref.d) g.rotateY(Math.PI / 2);
         g.translate(x, c.base - 0.02, z);
         barriers.push(g);
+      } else if (ref.type === 'block') {
+        // room / hiding wall: starts 1 m under the ground so it never floats above a dip
+        blocks.push(tiledBox(ref.w, ref.h + 1, ref.d, 2.5).translate(x, c.base + (ref.h - 1) / 2, z));
       } else if (ref.type === 'rock') {
         rocks.push(rockGeometry(ref.w, ref.h, ref.d, rockSeed++).translate(x, c.base, z));
       } else if (ref.type === 'tree') {
@@ -164,6 +167,7 @@ export function buildWorld(renderer, scene) {
     scene.add(merged(posts, new THREE.MeshLambertMaterial({ color: 0x2a2a2a })));
     scene.add(merged(barriers, new THREE.MeshLambertMaterial({ map: barTex, color: 0xe8e4dc })));
     scene.add(merged(rocks, new THREE.MeshLambertMaterial({ map: TX.rock(), color: 0xcfc6b8 })));
+    scene.add(merged(blocks, new THREE.MeshLambertMaterial({ map: concTex, color: 0xd9a877 })));
     scene.add(merged(trunks, new THREE.MeshLambertMaterial({ map: TX.bark() })));
     scene.add(merged(leaves, new THREE.MeshLambertMaterial({ color: 0x35582f, flatShading: true })));
   }
@@ -223,15 +227,19 @@ function rockGeometry(w, h, d, seed) {
 
 // ==================================================================== pickups
 
+const PICKUP_HEX = { L: 0x5ff3ff, P: 0xffb02e, D: 0x7dff6a };
+const PICKUP_CSS = { L: '#5ff3ff', P: '#ffb02e', D: '#7dff6a' };
+
 function arrowIcon(type) {
   const c = document.createElement('canvas');
   c.width = c.height = 64;
   const g = c.getContext('2d');
-  g.fillStyle = type === 'L' ? '#5ff3ff' : '#ffb02e';
+  g.fillStyle = PICKUP_CSS[type];
   g.strokeStyle = 'rgba(0,0,0,0.6)';
   g.lineWidth = 4;
   g.beginPath();
-  if (type === 'L') { g.moveTo(32, 6); g.lineTo(56, 34); g.lineTo(42, 34); g.lineTo(42, 58); g.lineTo(22, 58); g.lineTo(22, 34); g.lineTo(8, 34); }
+  if (type === 'D') { g.moveTo(6, 10); g.lineTo(30, 32); g.lineTo(6, 54); g.lineTo(20, 54); g.lineTo(44, 32); g.lineTo(20, 10); g.closePath(); g.stroke(); g.fill(); g.beginPath(); g.moveTo(28, 10); g.lineTo(52, 32); g.lineTo(28, 54); g.lineTo(40, 54); g.lineTo(62, 32); g.lineTo(40, 10); }
+  else if (type === 'L') { g.moveTo(32, 6); g.lineTo(56, 34); g.lineTo(42, 34); g.lineTo(42, 58); g.lineTo(22, 58); g.lineTo(22, 34); g.lineTo(8, 34); }
   else { g.moveTo(58, 32); g.lineTo(30, 8); g.lineTo(30, 22); g.lineTo(6, 22); g.lineTo(6, 42); g.lineTo(30, 42); g.lineTo(30, 56); }
   g.closePath();
   g.stroke();
@@ -248,21 +256,22 @@ class PickupVisuals {
     ringG.rotateX(Math.PI / 2);
     const canG = new THREE.CylinderGeometry(0.18, 0.18, 0.5, 12);
     const canMat = {
-      L: new THREE.MeshBasicMaterial({ color: 0x5ff3ff, toneMapped: false }),
-      P: new THREE.MeshBasicMaterial({ color: 0xffb02e, toneMapped: false }),
+      L: new THREE.MeshBasicMaterial({ color: PICKUP_HEX.L, toneMapped: false }),
+      P: new THREE.MeshBasicMaterial({ color: PICKUP_HEX.P, toneMapped: false }),
+      D: new THREE.MeshBasicMaterial({ color: PICKUP_HEX.D, toneMapped: false }),
     };
-    const icons = { L: arrowIcon('L'), P: arrowIcon('P') };
+    const icons = { L: arrowIcon('L'), P: arrowIcon('P'), D: arrowIcon('D') };
     for (const p of M.PICKUPS) {
       const g = new THREE.Group();
       g.position.set(p.x, M.heightAt(p.x, p.z), p.z);
-      const ringMat = new THREE.MeshBasicMaterial({ color: p.type === 'L' ? 0x5ff3ff : 0xffb02e, toneMapped: false });
+      const ringMat = new THREE.MeshBasicMaterial({ color: PICKUP_HEX[p.type], toneMapped: false });
       const ring = new THREE.Mesh(ringG, ringMat);
       ring.position.y = 0.08;
       g.add(ring);
       const can = new THREE.Group();
       can.add(new THREE.Mesh(canG, canMat[p.type]));
       const icon = new THREE.Sprite(new THREE.SpriteMaterial({ map: icons[p.type], transparent: true, depthWrite: false }));
-      icon.scale.setScalar(0.4);
+      icon.scale.setScalar(p.type === 'D' ? 0.7 : 0.4);
       icon.position.y = 0.6;
       can.add(icon);
       can.position.y = 0.9;
@@ -276,7 +285,7 @@ class PickupVisuals {
     if (!it) return;
     it.active = a;
     it.can.visible = a;
-    it.ringMat.color.set(a ? (it.type === 'L' ? 0x5ff3ff : 0xffb02e) : 0x333333);
+    it.ringMat.color.set(a ? PICKUP_HEX[it.type] : 0x333333);
   }
   setAll(list) { for (const p of list) this.setActive(p.id, p.active); }
   update(t) {

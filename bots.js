@@ -1,7 +1,7 @@
 // Server-side bots. They use the same physics, guns, ammo and pickups as real players.
 import { Controller } from './public/js/physics.js';
 import {
-  ARENA, PLAYER, GUNS, MAX_AMMO, PICKUP_RADIUS, WATER_LEVEL, KILL_Y,
+  ARENA, PLAYER, GUNS, maxOf, PICKUP_RADIUS, WATER_LEVEL, KILL_Y,
   heightAt, inArena, buildColliders, rayAABB, rayStatic,
 } from './public/js/shared/map.js';
 
@@ -105,7 +105,7 @@ export function updateBot(room, pl, dt, api) {
   if (need) {
     let bd = 60;
     for (const pk of api.pickups) {
-      if (!pk.active || (need !== 'any' && pk.type !== need) || pl.ammo[pk.type] >= MAX_AMMO) continue;
+      if (!pk.active || pk.type === 'D' || (need !== 'any' && pk.type !== need) || pl.ammo[pk.type] >= maxOf(pk.type)) continue;
       const d = Math.hypot(pk.x - me[0], pk.z - me[2]);
       if (d < bd) { bd = d; goal = { x: pk.x, z: pk.z, exact: true }; }
     }
@@ -181,6 +181,8 @@ export function updateBot(room, pl, dt, api) {
     sprint: L.sprint && !B.visible,
   };
   B.jumpNext = false;
+  // pushed over the wall with an air dash in hand: dash back toward the middle
+  if (pl.ammo.D > 0 && !c.onGround && !inArena(c.pos.x, c.pos.z) && c.dash(-c.pos.x, -c.pos.z)) pl.ammo.D--;
   c.update(dt, input, B.yaw);
   c.events.length = 0;
   pl.p = [c.pos.x, c.pos.y, c.pos.z];
@@ -190,7 +192,7 @@ export function updateBot(room, pl, dt, api) {
   if (c.pos.y < KILL_Y) { api.kill(pl); return; }
 
   for (const pk of api.pickups) {
-    if (pk.active && pl.ammo[pk.type] < MAX_AMMO && Math.hypot(pk.x - c.pos.x, pk.z - c.pos.z) < PICKUP_RADIUS) api.takePickup(pl, pk);
+    if (pk.active && pl.ammo[pk.type] < maxOf(pk.type) && Math.hypot(pk.x - c.pos.x, pk.z - c.pos.z) < PICKUP_RADIUS) api.takePickup(pl, pk);
   }
 
   // ---------------------------------------------------------------- shoot

@@ -17,6 +17,8 @@ export class Hud {
     this.ammoEl = { L: $('#ammo-L'), P: $('#ammo-P') };
     this.barEl = { L: $('#bar-L'), P: $('#bar-P') };
     this.gunEl = { L: $('.gun-L'), P: $('.gun-P') };
+    this.dashEl = $('#dash');
+    this.dashN = $('#dash-n');
     this.feed = $('#killfeed');
     this.centerEl = $('#center-msg');
     this.subEl = $('#sub-msg');
@@ -53,6 +55,8 @@ export class Hud {
       this.gunEl[g].classList.toggle('low', a[g] <= 5);
       this.gunEl[g].classList.toggle('empty', a[g] <= 0);
     }
+    this.dashN.textContent = a.D || 0;
+    this.dashEl.classList.toggle('on', (a.D || 0) > 0);
   }
 
   flashEmpty(g) {

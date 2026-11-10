@@ -66,7 +66,7 @@ export class Game {
     this.state = 'menu'; // menu | play | ended
     this.alive = false;
     this.inputActive = false;
-    this.ammo = { L: M.MAX_AMMO, P: M.MAX_AMMO };
+    this.ammo = M.fullAmmo();
     this.yaw = 0;
     this.pitch = 0;
     this.keys = new Set();
@@ -117,6 +117,7 @@ export class Game {
       // crouching with Ctrl: stop Ctrl+D/S/A etc. from triggering browser shortcuts (Ctrl+W can't be blocked; see beforeunload)
       if (e.ctrlKey) e.preventDefault();
       if (down) this.keys.add(e.code); else this.keys.delete(e.code);
+      if (down && !e.repeat && (e.code === 'ShiftLeft' || e.code === 'ShiftRight')) this.tryDash();
       if (e.code === 'KeyQ') this.fireHeld.L = down;
       if (e.code === 'KeyE') this.fireHeld.P = down;
     };
@@ -172,6 +173,17 @@ export class Game {
     }
   }
 
+  // Air dash power-up: Shift while in the air flies you forward (the way you are looking) and up a little
+  tryDash() {
+    if (!this.alive || this.ammo.D <= 0) return;
+    if (!this.ctrl.dash(-Math.sin(this.yaw), -Math.cos(this.yaw))) return;
+    this.ammo.D--;
+    this.hud.setAmmo(this.ammo);
+    this.net.send({ t: 'dash' });
+    this.sfx.dash();
+    this.hud.popup('AIR DASH!', '#b9ff9c');
+  }
+
   lockPointer() {
     this.sfx.init();
     // input switches on when the browser confirms the lock (pointerlockchange)
@@ -196,10 +208,10 @@ export class Game {
     n.on('death', (m) => this.onDeath(m));
     n.on('imp', (m) => this.onImpulse(m));
     n.on('shot', (m) => this.onShot(m));
-    n.on('ammo', (m) => { this.ammo.L = m.L; this.ammo.P = m.P; this.hud.setAmmo(this.ammo); });
+    n.on('ammo', (m) => { this.ammo.L = m.L; this.ammo.P = m.P; this.ammo.D = m.D || 0; this.hud.setAmmo(this.ammo); });
     n.on('pk', (m) => {
       this.world.pickups.setActive(m.id, m.a);
-      if (m.by === this.myId) { this.sfx.pickup(); this.hud.popup(`+${M.PICKUP_AMOUNT} ${M.GUNS[this.world.pickups.items.get(m.id).type].name} AMMO`, '#cfe'); }
+      if (m.by === this.myId) { this.sfx.pickup(); const ty = this.world.pickups.items.get(m.id).type; this.hud.popup(`+${M.giveOf(ty)} ${M.PICKUP_NAME[ty]}${ty === 'D' ? ' — press Shift in the air' : ''}`, ty === 'D' ? '#b9ff9c' : '#cfe'); }
     });
     n.on('gone', (m) => this.removeAvatar(m.id));
     n.on('end', (m) => this.onEnd(m));
@@ -304,7 +316,7 @@ export class Game {
       this.alive = true;
       this.fellSent = false;
       this.deathAt = 0;
-      this.ammo = { L: M.MAX_AMMO, P: M.MAX_AMMO };
+      this.ammo = M.fullAmmo();
       this.hud.setAmmo(this.ammo);
       this.hud.setFade(0);
       this.hud.center('', '');
@@ -511,7 +523,7 @@ export class Game {
 
     if (this.state === 'menu') {
       const a = this.t * 0.035;
-      this.camera.position.set(Math.cos(a) * 72, 30, Math.sin(a) * 58);
+      this.camera.position.set(Math.cos(a) * 90, 38, Math.sin(a) * 72);
       this.camera.lookAt(0, 0, 0);
       this.camera.fov = 60;
       this.camera.updateProjectionMatrix();
@@ -547,7 +559,7 @@ export class Game {
     for (const e of c.events) {
       if (e === 'jump') this.sfx.step(false);
       else if (e === 'splash') this.sfx.splash(null);
-      else if (e.startsWith('land:')) this.sfx.land(Number(e.slice(5)));
+      else if (e.startsWith('land:')) { const v = Number(e.slice(5)); this.sfx.land(v); this.dip = Math.min(0.3, v * 0.014); } // the view dips on landing
     }
     c.events.length = 0;
 
@@ -565,10 +577,12 @@ export class Game {
     // camera
     // eye height glides down/up when crouching
     this.eyeH += ((c.crouching ? M.PLAYER.crouchEye : M.PLAYER.eye) - this.eyeH) * Math.min(1, dt * 12);
-    if (this.alive || p.y > -45) this.camera.position.set(p.x, p.y + this.eyeH, p.z);
+    this.dip = (this.dip || 0) * Math.exp(-dt * 9);
+    this.roll = (this.roll || 0) + (-input.r * 0.014 - (this.roll || 0)) * Math.min(1, dt * 10); // lean a little when strafing
+    if (this.alive || p.y > -45) this.camera.position.set(p.x, p.y + this.eyeH - this.dip, p.z);
     this.shake = Math.max(0, this.shake - dt * 1.8);
     const sh = this.shake * this.shake;
-    this.camera.rotation.set(this.pitch + (Math.random() - 0.5) * sh * 0.06, this.yaw + (Math.random() - 0.5) * sh * 0.06, 0);
+    this.camera.rotation.set(this.pitch + (Math.random() - 0.5) * sh * 0.06, this.yaw + (Math.random() - 0.5) * sh * 0.06, this.roll);
     const kbs = Math.hypot(c.kb.x, c.kb.z);
     const sprinting = input.sprint && input.f > 0 && c.onGround;
     const fov = 75 + (sprinting ? 5 : 0) + Math.min(12, kbs * 0.45);
@@ -593,7 +607,7 @@ export class Game {
 
     if (this.alive) {
       for (const it of this.world.pickups.items.values()) {
-        if (!it.active || this.ammo[it.type] >= M.MAX_AMMO) continue;
+        if (!it.active || this.ammo[it.type] >= M.maxOf(it.type)) continue;
         if (Math.hypot(p.x - it.x, p.z - it.z) < M.PICKUP_RADIUS && Math.abs(p.y - it.group.position.y) < 2.5) {
           const last = this.pickTimes.get(it.id) || 0;
           if (now - last > 500) { this.pickTimes.set(it.id, now); this.net.send({ t: 'pick', id: it.id }); }
