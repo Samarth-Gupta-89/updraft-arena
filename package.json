@@ -1,0 +1,19 @@
+{
+  "name": "updraft-arena",
+  "version": "1.0.0",
+  "description": "Multiplayer browser FPS: lift opponents into the air and push them out of the arena.",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "three": "0.170.0",
+    "ws": "8.18.0"
+  }
+}

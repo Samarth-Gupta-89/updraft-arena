@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Updraft Arena</title>
+  <meta name="description" content="Lift them up. Push them out. A multiplayer browser shooter.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+  <script type="importmap">
+    { "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/examples/jsm/" } }
+  </script>
+</head>
+<body>
+  <canvas id="view"></canvas>
+
+  <!-- ============ menus ============ -->
+  <div id="ui">
+    <div class="brand">
+      <div class="logo">UPDRAFT<span>ARENA</span></div>
+      <div class="tagline">Lift them up. Push them out.</div>
+    </div>
+
+    <section id="screen-login" class="screen panel">
+      <h2>Enter the arena</h2>
+      <p id="invite-note" class="invite hidden"></p>
+      <form id="form-login" autocomplete="on">
+        <label>Name<input id="in-name" name="name" maxlength="16" placeholder="Your player name" required></label>
+        <label>Email<input id="in-email" name="email" type="email" maxlength="100" placeholder="you@example.com" required></label>
+        <div class="sex-row"><span>Player</span>
+          <label><input type="radio" name="sex" value="m" checked> Male</label>
+          <label><input type="radio" name="sex" value="f"> Female</label>
+        </div>
+        <button id="btn-login" class="btn primary" type="submit">Continue</button>
+      </form>
+    </section>
+
+    <section id="screen-menu" class="screen panel hidden">
+      <h2>Hi <span id="hello-name"></span> — pick a mode</h2>
+      <div class="modes">
+        <button id="btn-dm" class="mode-card">
+          <span class="mode-title">Deathmatch</span>
+          <span class="mode-sub">Free-for-all · up to 10 players</span>
+          <span class="mode-desc">Every player for themselves. First to 15 knockouts wins.</span>
+        </button>
+        <button id="btn-team" class="mode-card">
+          <span class="mode-title">Team Battle</span>
+          <span class="mode-sub">Red vs Blue · 5 per team</span>
+          <span class="mode-desc">Knock the other team out. First team to 25 wins.</span>
+        </button>
+      </div>
+      <form id="form-join" class="join-row">
+        <input id="in-code" placeholder="Have a room code or link? Paste it here" maxlength="200">
+        <button class="btn" type="submit">Join</button>
+      </form>
+    </section>
+
+    <section id="screen-lobby" class="screen panel hidden">
+      <div class="lobby-head">
+        <div>
+          <div class="eyebrow" id="lobby-mode"></div>
+          <h2>Room <span id="lobby-code" class="code"></span></h2>
+        </div>
+        <div class="count" id="lobby-count"></div>
+      </div>
+      <div class="share">
+        <label>Invite link — send this to your friends</label>
+        <div class="share-row">
+          <input id="share-link" readonly>
+          <button id="btn-copy" class="btn">Copy link</button>
+        </div>
+        <p id="share-note" class="share-note hidden">You're hosting on this laptop, so this link works for friends on the same Wi-Fi. For friends elsewhere, put the game online (see README).</p>
+      </div>
+      <div id="lobby-players"></div>
+      <div id="lobby-bots" class="bot-row hidden">
+        <span class="muted">Add bot</span>
+        <button class="btn small" data-bot="easy">Easy</button>
+        <button class="btn small" data-bot="medium">Medium</button>
+        <button class="btn small" data-bot="hard">Hard</button>
+      </div>
+      <div class="lobby-actions">
+        <button id="btn-leave" class="btn ghost">Leave</button>
+        <span id="wait-host" class="muted"></span>
+        <button id="btn-start" class="btn primary hidden">Start match</button>
+      </div>
+      <div class="controls">
+        <div><kbd>W A S D</kbd> move</div>
+        <div><kbd>Space</kbd> jump</div>
+        <div><kbd>Shift</kbd> sprint · <kbd>C</kbd> crouch</div>
+        <div><kbd class="lift">Left click</kbd> LIFTER — launches them up (keeps stacking)</div>
+        <div><kbd class="push">Right click</kbd> SHOVER — knocks them back</div>
+        <div><kbd>Tab</kbd> scores · <kbd>Esc</kbd> pause (host: add bots)</div>
+        <label class="sens">Mouse sensitivity <input id="sens" class="sens-input" type="range" min="6" max="60" step="1"></label>
+      </div>
+      <p class="tip">Tip: lift a player above the wall, then shove them over it. Anyone who falls out of the arena is knocked out.</p>
+    </section>
+
+    <section id="screen-disconnected" class="screen panel hidden">
+      <h2>Disconnected</h2>
+      <p class="muted">Lost connection to the game server.</p>
+      <button id="btn-reconnect" class="btn primary">Reconnect</button>
+    </section>
+  </div>
+
+  <!-- ============ in-game HUD ============ -->
+  <div id="hud" class="hidden">
+    <div id="vignette"></div>
+    <div id="water-tint"></div>
+    <div id="fade"></div>
+    <div id="crosshair"><i></i><i></i><i></i><i></i></div>
+    <div id="hitmarker"></div>
+    <div id="dmg"></div>
+    <div id="topbar">
+      <div id="score-a"></div>
+      <div class="timer-wrap"><div id="timer">7:00</div><div id="goal"></div></div>
+      <div id="score-b"></div>
+    </div>
+    <div id="killfeed"></div>
+    <div id="center-msg"></div>
+    <div id="sub-msg"></div>
+    <div id="popup"></div>
+    <div id="status"></div>
+    <div class="gun gun-L">
+      <div class="gun-key">LMB</div>
+      <div class="gun-name">LIFTER</div>
+      <div class="gun-count"><b id="ammo-L">20</b><span>/20</span></div>
+      <div class="gun-bar"><span id="bar-L"></span></div>
+    </div>
+    <div class="gun gun-P">
+      <div class="gun-key">RMB</div>
+      <div class="gun-name">SHOVER</div>
+      <div class="gun-count"><b id="ammo-P">20</b><span>/20</span></div>
+      <div class="gun-bar"><span id="bar-P"></span></div>
+    </div>
+    <div id="scoreboard" class="hidden"></div>
+  </div>
+
+  <div id="play-overlay" class="hidden">
+    <div class="po-card">
+      <div class="po-title" id="po-title">Click to play</div>
+      <div class="po-sub">Left click lifts · Right click pushes · C crouch · Esc pauses</div>
+      <button id="btn-resume" class="btn primary">Play</button>
+      <label class="sens po-sens">Mouse sensitivity <input class="sens-input" type="range" min="6" max="60" step="1"></label>
+      <div id="po-bots" class="po-bots hidden">
+        <div class="po-bots-head">Bots <small>only you (the host) can add or remove them</small></div>
+        <div class="bot-row">
+          <span class="muted">Add bot</span>
+          <button class="btn small" data-bot="easy">Easy</button>
+          <button class="btn small" data-bot="medium">Medium</button>
+          <button class="btn small" data-bot="hard">Hard</button>
+        </div>
+        <ul id="po-bot-list" class="bot-list"></ul>
+      </div>
+    </div>
+  </div>
+  <div id="end-overlay" class="hidden"></div>
+  <div id="toast"></div>
+  <div id="webgl-error" class="hidden">Your browser could not start 3D graphics (WebGL). Try Chrome, Edge or Firefox with hardware acceleration on.</div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>
