@@ -1,5 +1,5 @@
 // Local player movement: terrain + box collisions, water, and knockback from lift/push hits.
-import { PLAYER, PHYS, DASH, WATER_LEVEL, heightAt, inArena } from './shared/map.js';
+import { PLAYER, PHYS, DASH, WATER_LEVEL, ARENA, EDGES, heightAt, inArena } from './shared/map.js';
 
 const R = PLAYER.radius, H = PLAYER.height, STEP = 0.4;
 
@@ -51,17 +51,18 @@ export class Controller {
   impulse(g, d) {
     const now = performance.now();
     if (g === 'L') {
-      this.vy = Math.min(PHYS.maxVy, Math.max(this.vy, 0) + PHYS.liftV);
+      // launch speed that rises exactly liftHeight under gravity (v = sqrt(2 g h)), whatever they were doing before
+      this.vy = Math.sqrt(2 * PHYS.gravity * PHYS.liftHeight);
       this.floatUntil = now + PHYS.liftFloatMs;
     } else {
-      let hx = d[0], hz = d[2];
-      const l = Math.hypot(hx, hz) || 1;
-      hx /= l; hz /= l;
+      // the hit adds speed along the direction the shot was travelling (all three axes)
+      const l = Math.hypot(d[0], d[1], d[2]) || 1;
+      const hx = d[0] / l, hy = d[1] / l, hz = d[2] / l;
       this.kb.x += hx * PHYS.pushV;
       this.kb.z += hz * PHYS.pushV;
       const m = Math.hypot(this.kb.x, this.kb.z);
       if (m > PHYS.maxKb) { this.kb.x *= PHYS.maxKb / m; this.kb.z *= PHYS.maxKb / m; }
-      this.vy = Math.min(PHYS.maxVy, Math.max(this.vy, 0) + PHYS.pushUp);
+      this.vy = Math.min(PHYS.maxVy, Math.max(this.vy, 0) + PHYS.pushUp + Math.max(0, hy) * PHYS.pushV * 0.5);
     }
     this.onGround = false;
     this.pos.y += 0.02;
@@ -107,9 +108,15 @@ export class Controller {
     if (dl <= maxD) { this.mv.x = tx; this.mv.z = tz; }
     else { this.mv.x += dx / dl * maxD; this.mv.z += dz / dl * maxD; }
 
-    const kd = this.onGround ? 7 : this.inWater ? 3 : PHYS.airDrag;
-    const kf = Math.exp(-kd * dt);
-    this.kb.x *= kf; this.kb.z *= kf;
+    // knockback follows simple physics: it keeps its speed in the air, ground friction slows a slide, water drags
+    if (this.inWater) {
+      const kf = Math.exp(-3 * dt);
+      this.kb.x *= kf; this.kb.z *= kf;
+    } else if (this.onGround) {
+      const sp = Math.hypot(this.kb.x, this.kb.z);
+      const kf = sp > 0 ? Math.max(0, sp - PHYS.friction * dt) / sp : 0;
+      this.kb.x *= kf; this.kb.z *= kf;
+    }
 
     // ---- vertical
     if (this.inWater) {
@@ -118,7 +125,7 @@ export class Controller {
       this.vy *= Math.exp(-2.6 * dt);
       if (inp.jump && depth < 1.7) this.vy = Math.max(this.vy, 5.6);
     } else {
-      this.vy -= PHYS.gravity * (now < this.floatUntil ? PHYS.liftGravScale : 1) * dt;
+      this.vy -= PHYS.gravity * dt;
     }
     // jump: forgiving timing (a press just before landing, or just after running off an edge, still works)
     if (inp.jump && !this.jumpHeld) this.jumpBuf = PHYS.jumpBufferMs / 1000;
@@ -194,6 +201,24 @@ export class Controller {
       for (const v of [this.mv, this.kb]) {
         const dot = v.x * nx + v.z * nz;
         if (dot < 0) { v.x -= dot * nx; v.z -= dot * nz; }
+      }
+    }
+    // the boundary wall follows the arena outline. It is solid from both sides, up to its top.
+    if (p.y < ARENA.wallH - 0.01 && p.y + this.height > -1) {
+      const T = ARENA.wallT;
+      for (const e of EDGES) {
+        const d = (p.x - e.ax) * e.nx + (p.z - e.az) * e.nz; // > 0 inside the arena
+        if (d >= R || d <= -T - R) continue;
+        const al = (p.x - e.ax) * e.tx + (p.z - e.az) * e.tz;
+        if (al < -T - R || al > e.len + T + R) continue;
+        const side = d > -T / 2 ? 1 : -1; // which face of the wall we are on
+        const push = side > 0 ? R - d : d + T + R;
+        const nx = e.nx * side, nz = e.nz * side;
+        p.x += nx * push; p.z += nz * push;
+        for (const v of [this.mv, this.kb]) {
+          const dot = v.x * nx + v.z * nz;
+          if (dot < 0) { v.x -= dot * nx; v.z -= dot * nz; }
+        }
       }
     }
   }

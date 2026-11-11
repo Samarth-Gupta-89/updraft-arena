@@ -114,7 +114,7 @@ function roomInfo(room) {
     timeLeft: room.state === 'playing' ? Math.max(0, room.endsAt - now()) : 0,
     players: [...room.players.values()].map((p) => ({
       id: p.id, name: p.name, team: p.team, color: p.color, kills: p.kills, deaths: p.deaths, alive: p.alive,
-      bot: p.isBot ? p.botLevel : null, sex: p.sex || 'm',
+      bot: p.isBot ? p.botLevel : null, sex: p.sex || 'm', look: p.look || 'egg',
     })),
   };
 }
@@ -259,7 +259,7 @@ function endMatch(room, winner) {
 
 // ---------------------------------------------------------------- shots, pickups, bots
 function applyImpulse(tg, g, d) {
-  if (tg.isBot) tg.bot.ctrl.impulse(g, d);
+  if (tg.isBot) { tg.bot.ctrl.impulse(g, d); tg.bot.flinchUntil = now() + 700; } // a bot that was just hit aims worse too
   else send(tg, { t: 'imp', g, d: d.map(r3), by: tg.lastHit.by });
 }
 
@@ -289,7 +289,7 @@ function takePickup(room, pl, pk) {
 
 function addBot(room, level) {
   const pl = {
-    id: nextId++, ws: null, isBot: true, botLevel: level, sex: Math.random() < 0.5 ? 'f' : 'm', name: botName(room), email: null, room: null,
+    id: nextId++, ws: null, isBot: true, botLevel: level, sex: Math.random() < 0.5 ? 'f' : 'm', look: Math.random() < 0.5 ? 'human' : 'egg', name: botName(room), email: null, room: null,
     team: null, color: null, alive: false, p: [0, 0, 0], ya: 0, pi: 0, f: 0, kills: 0, deaths: 0,
     ammo: fullAmmo(), bot: makeBrain(level),
   };
@@ -314,7 +314,7 @@ function handle(pl, m) {
     const email = String(m.email || '').trim().slice(0, 100);
     if (!name) return send(pl, { t: 'err', msg: 'Please enter a name.' });
     if (!EMAIL_RE.test(email)) return send(pl, { t: 'err', msg: 'Please enter a valid email.' });
-    pl.name = name; pl.baseName = name; pl.email = email; pl.sex = m.sex === 'f' ? 'f' : 'm';
+    pl.name = name; pl.baseName = name; pl.email = email; pl.sex = m.sex === 'f' ? 'f' : 'm'; pl.look = m.look === 'human' ? 'human' : 'egg';
     logPlayer(name, email);
     return send(pl, { t: 'hello_ok', name });
   }

@@ -53,6 +53,7 @@ function busy(btn, on, label) {
 $('#in-name').value = store.get('name');
 $('#in-email').value = store.get('email');
 if (store.get('sex') === 'f') document.querySelector('input[name=sex][value=f]').checked = true;
+if (store.get('look') === 'human') document.querySelector('input[name=look][value=human]').checked = true;
 if (invite) {
   $('#invite-note').innerHTML = `You're invited to room <b>${esc(invite)}</b>`;
   $('#invite-note').classList.remove('hidden');
@@ -79,7 +80,9 @@ $('#form-login').addEventListener('submit', async (e) => {
   }
   const sex = document.querySelector('input[name=sex]:checked').value;
   store.set('sex', sex);
-  net.send({ t: 'hello', name, email, sex });
+  const look = document.querySelector('input[name=look]:checked').value;
+  store.set('look', look);
+  net.send({ t: 'hello', name, email, sex, look });
 });
 
 net.on('welcome', (m) => { myId = m.id; });

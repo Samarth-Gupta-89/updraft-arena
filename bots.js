@@ -1,8 +1,8 @@
 // Server-side bots. They use the same physics, guns, ammo and pickups as real players.
 import { Controller } from './public/js/physics.js';
 import {
-  ARENA, PLAYER, GUNS, maxOf, PICKUP_RADIUS, WATER_LEVEL, KILL_Y,
-  heightAt, inArena, buildColliders, rayAABB, rayStatic,
+  ARENA, EDGES, GUNS, maxOf, PICKUP_RADIUS, WATER_LEVEL, KILL_Y,
+  heightAt, inArena, edgeDist, bodyOf, buildColliders, rayAABB, rayStatic,
 } from './public/js/shared/map.js';
 
 const COLLIDERS = buildColliders();
@@ -38,8 +38,8 @@ export function resetBrain(B, p, yaw) {
   Object.assign(B, { yaw, pitch: 0, target: 0, visible: false, seenFor: 0, think: 0.3, wander: null, detour: null, detourT: 0, lastPos: null });
 }
 
-const hitHeight = (pl) => ((pl.f & 8) ? PLAYER.crouchHitbox : PLAYER.hitHeight);
-const eyeOf = (p) => ({ x: p[0], y: p[1] + PLAYER.eye, z: p[2] });
+const hitHeight = (pl) => ((pl.f & 8) ? bodyOf(pl.look).crouchH : bodyOf(pl.look).h);
+const eyeOf = (p, look) => ({ x: p[0], y: p[1] + bodyOf(look).eye, z: p[2] });
 
 function canSee(eye, q) {
   const tx = q[0] - eye.x, ty = q[1] + 0.9 - eye.y, tz = q[2] - eye.z;
@@ -49,9 +49,12 @@ function canSee(eye, q) {
 
 // unit vector from p toward its nearest wall, plus the distance
 function nearestWall(p) {
-  const opts = [[ARENA.halfX - p[0], 1, 0], [p[0] + ARENA.halfX, -1, 0], [ARENA.halfZ - p[2], 0, 1], [p[2] + ARENA.halfZ, 0, -1]];
-  opts.sort((a, b) => a[0] - b[0]);
-  return { dist: opts[0][0], x: opts[0][1], z: opts[0][2] };
+  let best = null, bd = Infinity;
+  for (const e of EDGES) {
+    const d = (p[0] - e.ax) * e.nx + (p[2] - e.az) * e.nz;
+    if (d < bd) { bd = d; best = e; }
+  }
+  return { dist: bd, x: -best.nx, z: -best.nz };
 }
 
 function freeSpot(x, z) {
@@ -61,22 +64,28 @@ function freeSpot(x, z) {
 }
 function randomSpot() {
   for (let i = 0; i < 30; i++) {
-    const x = (Math.random() * 2 - 1) * (ARENA.halfX - 4), z = (Math.random() * 2 - 1) * (ARENA.halfZ - 4);
-    if (freeSpot(x, z)) return { x, z };
+    const x = (Math.random() * 2 - 1) * ARENA.halfX, z = (Math.random() * 2 - 1) * ARENA.halfZ;
+    if (edgeDist(x, z) > 4 && freeSpot(x, z)) return { x, z };
   }
-  return { x: 0, z: -12 };
+  return { x: -10, z: -6 };
 }
-const clampArena = (x, z) => ({
-  x: Math.max(-ARENA.halfX + 3, Math.min(ARENA.halfX - 3, x)),
-  z: Math.max(-ARENA.halfZ + 3, Math.min(ARENA.halfZ - 3, z)),
-});
+// pull a point back so it is at least 3 m inside every wall
+const clampArena = (x, z) => {
+  for (let i = 0; i < 2; i++) {
+    for (const e of EDGES) {
+      const d = (x - e.ax) * e.nx + (z - e.az) * e.nz;
+      if (d < 3) { x += e.nx * (3 - d); z += e.nz * (3 - d); }
+    }
+  }
+  return { x, z };
+};
 
 // api: { isEnemy(a, b), fire(pl, g, o, e, d, target|null), kill(pl), pickups, takePickup(pl, pk) }
 export function updateBot(room, pl, dt, api) {
   const B = pl.bot, L = B.L, c = B.ctrl;
   const t = Date.now();
   const me = [c.pos.x, c.pos.y, c.pos.z];
-  const eye = eyeOf(me);
+  const eye = eyeOf(me, pl.look);
 
   // ---------------------------------------------------------------- pick a target
   B.think -= dt;
@@ -208,12 +217,13 @@ export function updateBot(room, pl, dt, api) {
   if (pl.ammo[g] <= 0 || t < B.nextFire[g]) return;
   B.nextFire[g] = t + GUNS[g].interval * 1000 * L.fireMul * (0.9 + Math.random() * 0.3);
 
-  const err = () => (Math.random() + Math.random() - 1) * L.aimErr;
+  const err = () => (Math.random() + Math.random() - 1) * L.aimErr * (t < (B.flinchUntil || 0) ? 3 : 1);
   const yaw = B.yaw + err(), pitch = B.pitch + err() * 0.7;
   const dir = { x: -Math.sin(yaw) * Math.cos(pitch), y: Math.sin(pitch), z: -Math.cos(yaw) * Math.cos(pitch) };
   const tStatic = rayStatic(eye, dir, 150, COLLIDERS);
   const q = target.p;
-  const tHit = rayAABB(eye, dir, q[0] - PLAYER.hitHalf, q[1], q[2] - PLAYER.hitHalf, q[0] + PLAYER.hitHalf, q[1] + hitHeight(target), q[2] + PLAYER.hitHalf);
+  const half = bodyOf(target.look).half;
+  const tHit = rayAABB(eye, dir, q[0] - half, q[1], q[2] - half, q[0] + half, q[1] + hitHeight(target), q[2] + half);
   const hit = tHit !== null && tHit < tStatic;
   const dist = hit ? tHit : tStatic;
   api.fire(pl, g, [eye.x, eye.y, eye.z], [eye.x + dir.x * dist, eye.y + dir.y * dist, eye.z + dir.z * dist], [dir.x, dir.y, dir.z], hit ? target : null);

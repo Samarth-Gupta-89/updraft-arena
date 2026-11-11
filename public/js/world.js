@@ -5,7 +5,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import * as M from './shared/map.js';
 import * as TX from './textures.js';
 
-const { ARENA, WATER_LEVEL, POND } = M;
+const { ARENA, WATER_LEVEL } = M;
 const smooth = (t) => { t = Math.min(1, Math.max(0, t)); return t * t * (3 - 2 * t); };
 
 // Box whose UVs tile every `tile` metres instead of stretching one texture over each face.
@@ -22,8 +22,10 @@ function tiledBox(w, h, d, tile) {
   return g;
 }
 
+// one mesh from many shapes (made un-indexed first, so any mix of shapes can be merged)
 function merged(geos, mat) {
-  return new THREE.Mesh(mergeGeometries(geos), mat);
+  if (!geos.length) return new THREE.Group();
+  return new THREE.Mesh(mergeGeometries(geos.map((g) => (g.index ? g.toNonIndexed() : g))), mat);
 }
 
 function withColor(g, hex) {
@@ -47,81 +49,116 @@ export function buildWorld(renderer, scene) {
   sun.position.copy(sunDir).multiplyScalar(120); // no shadows: they were the biggest GPU cost
   scene.add(sun, sun.target);
 
-  // ---------------------------------------------------------------- terrain
+  // ---------------------------------------------------------------- terrain (a grid stretched over the four-sided yard)
   {
-    const X = ARENA.halfX, Z = ARENA.halfZ;
-    const g = new THREE.PlaneGeometry(X * 2, Z * 2, 126, 96);
-    g.rotateX(-Math.PI / 2);
-    const pos = g.attributes.position;
-    const colors = new Float32Array(pos.count * 3);
+    const [A, B, Cc, D] = ARENA.poly;
+    const NU = 132, NV = 92;
+    const posArr = new Float32Array((NU + 1) * (NV + 1) * 3), uvArr = new Float32Array((NU + 1) * (NV + 1) * 2);
+    const colors = new Float32Array((NU + 1) * (NV + 1) * 3);
     const C = {
-      grassA: new THREE.Color(0x4f7030), grassB: new THREE.Color(0x7f9a47), dry: new THREE.Color(0xa0965c),
+      paveA: new THREE.Color(0xa6977a), paveB: new THREE.Color(0xbcab86), grass: new THREE.Color(0x58762f),
       dirt: new THREE.Color(0x7d6646), sand: new THREE.Color(0xa38f66), mud: new THREE.Color(0x4c4433), gravel: new THREE.Color(0x7f7970),
     };
     const col = new THREE.Color();
-    for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i), z = pos.getZ(i);
-      const y = M.heightAt(x, z);
-      pos.setY(i, y);
-      col.copy(C.grassA).lerp(C.grassB, M.fbm(x * 0.05 + 100, z * 0.05, 4, 21));
-      const n2 = M.fbm(x * 0.09, z * 0.09 + 50, 3, 22);
-      if (n2 > 0.58) col.lerp(C.dry, Math.min(1, (n2 - 0.58) * 3));
-      const n3 = M.fbm(x * 0.15, z * 0.15, 3, 23);
-      if (n3 > 0.64) col.lerp(C.dirt, Math.min(1, (n3 - 0.64) * 4));
-      if (y < WATER_LEVEL + 0.45) col.lerp(C.sand, smooth((WATER_LEVEL + 0.45 - y) / 0.5));
-      if (y < WATER_LEVEL - 0.2) col.lerp(C.mud, smooth((WATER_LEVEL - 0.2 - y) / 0.8));
-      const edge = Math.min(X - Math.abs(x), Z - Math.abs(z));
-      if (edge < 1.6) col.lerp(C.gravel, 1 - edge / 1.6);
-      colors[i * 3] = col.r; colors[i * 3 + 1] = col.g; colors[i * 3 + 2] = col.b;
+    let i = 0;
+    for (let iv = 0; iv <= NV; iv++) {
+      for (let iu = 0; iu <= NU; iu++, i++) {
+        const u = iu / NU, v = iv / NV;
+        const x = (1 - u) * (1 - v) * A[0] + u * (1 - v) * B[0] + u * v * Cc[0] + (1 - u) * v * D[0];
+        const z = (1 - u) * (1 - v) * A[1] + u * (1 - v) * B[1] + u * v * Cc[1] + (1 - u) * v * D[1];
+        const y = M.groundAt(x, z);
+        posArr[i * 3] = x; posArr[i * 3 + 1] = y; posArr[i * 3 + 2] = z;
+        uvArr[i * 2] = x / 104; uvArr[i * 2 + 1] = z / 80;
+        // sandy paved yard with a few green patches
+        col.copy(C.paveA).lerp(C.paveB, M.fbm(x * 0.05 + 100, z * 0.05, 4, 21));
+        const n2 = M.fbm(x * 0.07, z * 0.07 + 50, 3, 22);
+        if (n2 > 0.64) col.lerp(C.grass, Math.min(1, (n2 - 0.64) * 5));
+        const n3 = M.fbm(x * 0.15, z * 0.15, 3, 23);
+        if (n3 > 0.66) col.lerp(C.dirt, Math.min(1, (n3 - 0.66) * 4));
+        if (y < WATER_LEVEL + 0.45) col.lerp(C.sand, smooth((WATER_LEVEL + 0.45 - y) / 0.5));
+        if (y < WATER_LEVEL - 0.2) col.lerp(C.mud, smooth((WATER_LEVEL - 0.2 - y) / 0.8));
+        const edge = M.edgeDist(x, z);
+        if (edge < 1.6) col.lerp(C.gravel, 1 - edge / 1.6);
+        colors[i * 3] = col.r; colors[i * 3 + 1] = col.g; colors[i * 3 + 2] = col.b;
+      }
     }
+    const idx = [];
+    for (let iv = 0; iv < NV; iv++) {
+      for (let iu = 0; iu < NU; iu++) {
+        const a = iv * (NU + 1) + iu, b = a + 1, c = a + NU + 1, d = c + 1;
+        idx.push(a, c, b, b, c, d); // faces point up
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(uvArr, 2));
     g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    g.setIndex(idx);
     g.computeVertexNormals();
     const mat = new THREE.MeshLambertMaterial({ vertexColors: true, map: TX.terrainDetail() });
     mat.color.setScalar(1.45);
     scene.add(new THREE.Mesh(g, mat));
   }
 
-  // ---------------------------------------------------------------- pond
+  // ---------------------------------------------------------------- ponds (one sheet of water under both, the ground hides the rest)
   {
     const wn = TX.waterNormal();
     const mat = new THREE.MeshPhongMaterial({
       color: 0x24606c, specular: 0xbfd8e6, shininess: 90, normalMap: wn, normalScale: new THREE.Vector2(0.5, 0.5),
       transparent: true, opacity: 0.82,
     });
-    const water = new THREE.Mesh(new THREE.PlaneGeometry(POND.rx * 2 + 4, POND.rz * 2 + 4), mat);
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const k of M.PONDS) { x0 = Math.min(x0, k.x - k.rx); x1 = Math.max(x1, k.x + k.rx); z0 = Math.min(z0, k.z - k.rz); z1 = Math.max(z1, k.z + k.rz); }
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0 + 4, z1 - z0 + 4), mat);
     water.rotation.x = -Math.PI / 2;
-    water.position.set(POND.x, WATER_LEVEL, POND.z);
+    water.position.set((x0 + x1) / 2, WATER_LEVEL, (z0 + z1) / 2);
     scene.add(water);
     updaters.push((t) => wn.offset.set(t * 0.011, t * 0.019));
   }
 
-  // ---------------------------------------------------------------- platform, walls, hazard caps
+  // ---------------------------------------------------------------- arched stone bridge over the channel
+  {
+    const { x: bx, z: bz, halfLen: L, halfW: W, rise } = M.BRIDGE;
+    const open = 4.2; // half-width of the arch the water runs through
+    const side = new THREE.Shape();
+    side.moveTo(-L, -1.5);
+    for (let k = 0; k <= 24; k++) { const dx = -L + (2 * L * k) / 24; side.lineTo(dx, M.bridgeArch(dx)); }
+    side.lineTo(L, -1.5); side.lineTo(open, -1.5);
+    for (let k = 0; k <= 16; k++) { const dx = open - (2 * open * k) / 16; side.lineTo(dx, -0.75 + (rise - 0.35 + 0.75) * Math.cos((dx / open) * Math.PI / 2)); }
+    side.lineTo(-open, -1.5); side.closePath();
+    const deck = new THREE.ExtrudeGeometry(side, { depth: W * 2, bevelEnabled: false }).translate(bx, 0, bz - W);
+    const rail = new THREE.Shape();
+    for (let k = 0; k <= 24; k++) { const dx = -L + (2 * L * k) / 24; if (k) rail.lineTo(dx, M.bridgeArch(dx) - 0.05); else rail.moveTo(dx, M.bridgeArch(dx) - 0.05); }
+    for (let k = 24; k >= 0; k--) { const dx = -L + (2 * L * k) / 24; rail.lineTo(dx, M.bridgeArch(dx) + 0.45); }
+    rail.closePath();
+    const rails = [-1, 1].map((s) => new THREE.ExtrudeGeometry(rail, { depth: 0.22, bevelEnabled: false }).translate(bx, 0, bz + s * (W + 0.11) - 0.11));
+    scene.add(merged([deck, ...rails], new THREE.MeshLambertMaterial({ color: 0xe6dcc6 })));
+  }
+
+  // ---------------------------------------------------------------- boundary wall along the outline, hazard caps, slab
   const concTex = TX.concrete();
   {
-    const T = ARENA.wallT, X = ARENA.halfX + T, Z = ARENA.halfZ + T;
+    const T = ARENA.wallT, top = ARENA.wallH, bottom = -3;
     const walls = [], caps = [];
-    for (const c of colliders) {
-      if (c.type !== 'wall') continue;
-      const w = c.maxX - c.minX, d = c.maxZ - c.minZ;
-      const top = c.maxY, bottom = -3;
-      const g = tiledBox(w, top - bottom, d, 4);
-      g.translate((c.minX + c.maxX) / 2, (top + bottom) / 2, (c.minZ + c.maxZ) / 2);
-      walls.push(g);
-      const cg = tiledBox(w + 0.04, 0.32, d + 0.04, 1.6);
-      cg.translate((c.minX + c.maxX) / 2, top - 0.15, (c.minZ + c.maxZ) / 2);
-      caps.push(cg);
+    for (const e of M.EDGES) {
+      const ang = Math.atan2(-e.tz, e.tx);
+      const mx = (e.ax + e.bx) / 2 - e.nx * T / 2, mz = (e.az + e.bz) / 2 - e.nz * T / 2;
+      walls.push(tiledBox(e.len + T * 2.4, top - bottom, T, 4).rotateY(ang).translate(mx, (top + bottom) / 2, mz));
+      caps.push(tiledBox(e.len + T * 2.4, 0.32, T + 0.04, 1.6).rotateY(ang).translate(mx, top - 0.15, mz));
     }
     scene.add(merged(walls, new THREE.MeshLambertMaterial({ map: concTex, color: 0xe2ded6 })));
     scene.add(merged(caps, new THREE.MeshLambertMaterial({ map: TX.hazard() })));
     // the slab the arena sits on (seen when falling out)
-    const slab = tiledBox(X * 2, 3, Z * 2, 6);
-    slab.translate(0, -4.45, 0);
-    scene.add(merged([slab], new THREE.MeshLambertMaterial({ map: concTex, color: 0x8a8780 })));
+    const shape = new THREE.Shape();
+    ARENA.poly.forEach(([x, z], k) => { const px = x * 1.03, pz = z * 1.03; if (k) shape.lineTo(px, pz); else shape.moveTo(px, pz); });
+    shape.closePath();
+    const slab = new THREE.ExtrudeGeometry(shape, { depth: 3, bevelEnabled: false }).rotateX(Math.PI / 2).translate(0, -2.95, 0);
+    scene.add(new THREE.Mesh(slab, new THREE.MeshLambertMaterial({ color: 0x8a8780 })));
   }
 
   // ---------------------------------------------------------------- cover (merged per material)
   {
-    const crates = [], conts = [], posts = [], barriers = [], rocks = [], trunks = [], leaves = [], blocks = [];
+    const crates = [], conts = [], posts = [], barriers = [], rocks = [], trunks = [], leaves = [], blocks = [], stones = [];
     const CONT_COLORS = [0x9b3b2b, 0x2f5f8f, 0x3f7350, 0xb98a35];
     let rockSeed = 1;
     for (const c of colliders) {
@@ -149,13 +186,21 @@ export function buildWorld(renderer, scene) {
       } else if (ref.type === 'block') {
         // room / hiding wall: starts 1 m under the ground so it never floats above a dip
         blocks.push(tiledBox(ref.w, ref.h + 1, ref.d, 2.5).translate(x, c.base + (ref.h - 1) / 2, z));
+      } else if (ref.type === 'stone') {
+        stones.push(tiledBox(ref.w, ref.h + 1, ref.d, 2.5).translate(x, c.base + (ref.h - 1) / 2, z));
+      } else if (ref.type === 'nandi') {
+        const n = nandiGeometry();
+        const nx = M.NANDI.x, nz = M.NANDI.z;
+        scene.add(new THREE.Mesh(n.body.translate(nx, c.base, nz), new THREE.MeshPhongMaterial({ color: 0x1d1d21, specular: 0x55504a, shininess: 28 })));
+        scene.add(new THREE.Mesh(n.gold.translate(nx, c.base, nz), new THREE.MeshLambertMaterial({ color: 0xc9a13c })));
       } else if (ref.type === 'rock') {
         rocks.push(rockGeometry(ref.w, ref.h, ref.d, rockSeed++).translate(x, c.base, z));
       } else if (ref.type === 'tree') {
-        trunks.push(new THREE.CylinderGeometry(0.17, 0.3, 9, 7).translate(x, c.base + 4.5, z));
-        for (let i = 0; i < 4; i++) {
-          const t = i / 3;
-          leaves.push(new THREE.ConeGeometry(2.5 - t * 1.6, 3.2 - t * 0.6, 8).translate(x, c.base + 3.4 + t * 5.8, z));
+        // coconut palm: thin trunk, drooping fronds at the top
+        trunks.push(new THREE.CylinderGeometry(0.16, 0.28, 8, 7).translate(x, c.base + 4, z));
+        for (let i = 0; i < 8; i++) {
+          const frond = new THREE.ConeGeometry(0.55, 3.6, 4).scale(1, 1, 0.22).rotateZ(-(Math.PI / 2 + 0.3 + (i % 2) * 0.25)).translate(1.6, -0.45 - (i % 2) * 0.35, 0);
+          leaves.push(frond.rotateY((i / 8) * Math.PI * 2 + x).translate(x, c.base + 8.1, z));
         }
       }
     }
@@ -167,9 +212,12 @@ export function buildWorld(renderer, scene) {
     scene.add(merged(posts, new THREE.MeshLambertMaterial({ color: 0x2a2a2a })));
     scene.add(merged(barriers, new THREE.MeshLambertMaterial({ map: barTex, color: 0xe8e4dc })));
     scene.add(merged(rocks, new THREE.MeshLambertMaterial({ map: TX.rock(), color: 0xcfc6b8 })));
-    scene.add(merged(blocks, new THREE.MeshLambertMaterial({ map: concTex, color: 0xd9a877 })));
+    const blockMat = new THREE.MeshLambertMaterial({ map: concTex, color: 0xe6d3ab });
+    blockMat.color.multiplyScalar(1.5); // pale sandstone: brighter than the texture alone
+    scene.add(merged(blocks, blockMat));
+    scene.add(merged(stones, new THREE.MeshLambertMaterial({ map: concTex, color: 0x9a968e })));
     scene.add(merged(trunks, new THREE.MeshLambertMaterial({ map: TX.bark() })));
-    scene.add(merged(leaves, new THREE.MeshLambertMaterial({ color: 0x35582f, flatShading: true })));
+    scene.add(merged(leaves, new THREE.MeshLambertMaterial({ color: 0x4a7a30, flatShading: true, side: THREE.DoubleSide })));
   }
 
   const pickups = new PickupVisuals(scene);
@@ -207,6 +255,30 @@ function buildSky(sunDir) {
   sunSprite.scale.setScalar(110);
   grp.add(sunSprite);
   return grp;
+}
+
+// The Nandi: a big black reclining bull facing -x, built from stretched spheres. Origin = middle of its base.
+function nandiGeometry() {
+  const part = (sx, sy, sz, x, y, z, rz = 0) => new THREE.SphereGeometry(1, 16, 12).scale(sx, sy, sz).rotateZ(rz).translate(x, y, z);
+  const body = [
+    part(3.3, 1.45, 1.6, 0.3, 1.4, 0),            // body
+    part(0.95, 0.85, 0.85, -1.6, 2.75, 0),        // hump
+    part(1.0, 1.35, 0.9, -2.55, 2.3, 0, 0.35),    // neck
+    part(0.85, 0.7, 0.62, -3.3, 3.05, 0, -0.3),   // head
+    part(0.6, 0.45, 0.46, -3.95, 2.72, 0, -0.3),  // snout
+    part(1.3, 1.1, 0.55, 2.0, 1.0, 1.3), part(1.3, 1.1, 0.55, 2.0, 1.0, -1.3),         // haunches
+    part(1.15, 0.3, 0.32, -2.5, 0.3, 0.95), part(1.15, 0.3, 0.32, -2.5, 0.3, -0.95),   // folded front legs
+    part(0.9, 0.28, 0.3, 1.6, 0.28, 1.75), part(0.9, 0.28, 0.3, 1.6, 0.28, -1.75),     // hind legs
+    part(0.12, 0.2, 0.42, -3.0, 3.2, 0.78), part(0.12, 0.2, 0.42, -3.0, 3.2, -0.78),   // ears
+    part(0.13, 0.95, 0.13, 3.5, 1.25, 0.35),      // tail
+  ];
+  for (const s of [-1, 1]) body.push(new THREE.ConeGeometry(0.15, 0.85, 8).rotateX(s * 0.3).translate(-3.1, 3.95, s * 0.42)); // horns
+  const gold = [new THREE.TorusGeometry(1.08, 0.09, 6, 20).rotateY(Math.PI / 2).rotateZ(0.35).translate(-2.5, 2.05, 0)]; // bell garland
+  for (let i = 0; i < 7; i++) { const a = Math.PI * (0.15 + (0.7 * i) / 6); gold.push(part(0.14, 0.17, 0.14, -2.2 - Math.cos(a - Math.PI / 2) * 0.0, 2.05 - Math.sin(a) * 1.08 - 0.12, Math.cos(a) * 1.08)); }
+  gold.push(part(0.1, 0.22, 0.3, -4.05, 3.3, 0));            // forehead ornament
+  gold.push(part(3.34, 0.5, 0.75, 0.3, 2.4, 0));             // cloth over the back
+  const one = (list) => mergeGeometries(list.map((g) => (g.index ? g.toNonIndexed() : g)));
+  return { body: one(body), gold: one(gold) };
 }
 
 function rockGeometry(w, h, d, seed) {

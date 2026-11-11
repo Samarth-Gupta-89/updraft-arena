@@ -1,4 +1,5 @@
-// Remote player: a fat egg-shaped cutie with big eyes, stubby feet and two guns.
+// Remote player. Two looks: a fat egg-shaped cutie, or a normal-sized person in Indian dress
+// (man: long kurta + white dhoti and shoulder cloth; woman: saree with a gold blouse and border).
 // Static parts are merged per material so each player costs only ~12 draw calls.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -75,6 +76,36 @@ function sharedAssets() {
   shared.gunG = mergeGeometries([prep(new THREE.BoxGeometry(0.16, 0.2, 0.62), at(0, 0.08, -0.22)), prep(new THREE.BoxGeometry(0.09, 0.18, 0.1), at(0, -0.06, 0.02))]);
   shared.barrelG = prep(new THREE.CylinderGeometry(0.055, 0.055, 0.34, 8), new THREE.Matrix4().makeRotationX(Math.PI / 2).setPosition(0, 0.1, -0.68));
 
+  // ================= human, about 1.75 m tall, faces -Z, feet at y = 0 =================
+  const cyl = (rt, rb, h, x, y, z, sx = 1, sz = 1) => prep(new THREE.CylinderGeometry(rt, rb, h, 12), at(x, y, z, sx, 1, sz));
+  const slab = (w, h, d, x, y, z, rz = 0) => prep(new THREE.BoxGeometry(w, h, d), new THREE.Matrix4().makeRotationZ(rz).setPosition(x, y, z));
+  const head = [ball(0.115, 0, 1.62, 0, 1, 1.12, 1), cyl(0.05, 0.055, 0.1, 0, 1.49, 0)];
+  const hairCap = prep(new THREE.SphereGeometry(0.123, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), at(0, 1.64, 0.014));
+  const eyes = [ball(0.014, -0.04, 1.635, -0.108), ball(0.014, 0.04, 1.635, -0.108)];
+  // man: kurta down to the knees (player colour), white cloth over one shoulder, white dhoti legs
+  shared.hKurtaG = mergeGeometries([cyl(0.19, 0.25, 0.95, 0, 0.975, 0, 1, 0.7), ball(1, 0, 1.43, 0, 0.27, 0.1, 0.15)]);
+  shared.hSashG = mergeGeometries([slab(0.11, 0.8, 0.03, 0.02, 1.13, -0.17, 0.5), slab(0.11, 0.55, 0.03, -0.17, 1.2, 0.15)]);
+  shared.hSkinGm = mergeGeometries(head);
+  shared.hHairGm = mergeGeometries([hairCap, ...eyes, slab(0.07, 0.014, 0.02, 0, 1.575, -0.112)]); // short hair, eyes, moustache
+  shared.hLegG = mergeGeometries([limb(0.078, V(0, 0, 0), V(0, -0.8, 0)), ball(0.085, 0, -0.84, -0.05, 1, 0.5, 1.6)]);
+  shared.hSleeveG = mergeGeometries([limb(0.048, V(-0.24, 0, 0), V(-0.2, -0.12, -0.42)), limb(0.048, V(0.24, 0, 0), V(0.2, -0.12, -0.42))]);
+  shared.hHandG = mergeGeometries([ball(0.052, -0.2, -0.12, -0.45), ball(0.052, 0.2, -0.12, -0.45)]);
+  // woman: saree (player colour) = long skirt + the cloth across the chest and over the shoulder; gold blouse and border
+  shared.hSareeG = mergeGeometries([cyl(0.17, 0.33, 0.95, 0, 0.515, 0, 1, 0.85), slab(0.14, 0.74, 0.03, 0.02, 1.2, -0.155, -0.55), slab(0.15, 0.8, 0.03, -0.15, 1.02, 0.15)]);
+  shared.hBlouseG = mergeGeometries([
+    cyl(0.15, 0.17, 0.36, 0, 1.27, 0, 1, 0.75), ball(1, 0, 1.43, 0, 0.22, 0.08, 0.13),
+    prep(new THREE.TorusGeometry(0.325, 0.022, 6, 20), new THREE.Matrix4().makeRotationX(Math.PI / 2).scale(new THREE.Vector3(1, 0.85, 1)).setPosition(0, 0.07, 0)),
+  ]);
+  shared.hArmsGf = mergeGeometries([shared.hSleeveG.clone(), shared.hHandG.clone()]);
+  shared.hSkinGf = mergeGeometries([...head.map((g) => g.clone()), cyl(0.145, 0.155, 0.12, 0, 1.04, 0, 1, 0.75)]);
+  shared.hHairGf = mergeGeometries([hairCap.clone(), ...eyes.map((g) => g.clone()), ball(0.062, 0, 1.63, 0.125), limb(0.03, V(0, 1.56, 0.115), V(0, 1.18, 0.15))]); // bun + braid
+  shared.hBindiG = ball(0.014, 0, 1.672, -0.112);
+  shared.skin = new THREE.MeshLambertMaterial({ color: 0xc48a5a });
+  shared.hair = new THREE.MeshLambertMaterial({ color: 0x1a1410 });
+  shared.cloth = new THREE.MeshLambertMaterial({ color: 0xf4efe4 });
+  shared.gold = new THREE.MeshLambertMaterial({ color: 0xdcb44c });
+  shared.red = new THREE.MeshLambertMaterial({ color: 0xc81e2c });
+
   shared.ringG = new THREE.TorusGeometry(1.2, 0.07, 6, 28);
   shared.ringG.rotateX(Math.PI / 2);
   shared.shieldG = new THREE.SphereGeometry(1.75, 20, 12);
@@ -111,31 +142,54 @@ export class Avatar {
     this.bodyMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
     const g = (this.group = new THREE.Group());
     const female = info.sex === 'f';
+    this.look = info.look === 'human' ? 'human' : 'egg';
+    // sizes that differ between the two looks
+    const human = this.look === 'human';
+    const dim = (this.dim = human
+      ? { armY: 1.38, gunX: 0.2, gunY: -0.1, gunZ: -0.5, gunS: 0.55, tagY: 2.1, tagDrop: 0.5, sqY: 0.3, sqXZ: 0, swing: 0.7, rock: 0.04, bounce: 0.03, ring: 0.45, shield: 0.62, shieldY: 0.9, hip: 0.9, footX: 0.1 }
+      : { armY: ARM_Y, gunX: 0.8, gunY: -0.05, gunZ: -0.9, gunS: 1, tagY: 3.05, tagDrop: 0.85, sqY: 0.36, sqXZ: 0.12, swing: 0.9, rock: 0.13, bounce: 0.07, ring: 1, shield: 1, shieldY: 1.3, hip: 0.4, footX: 0.42 });
 
     // the egg squashes down when crouching and wobbles when walking (pivot at the ground)
     const egg = (this.egg = new THREE.Group());
-    egg.add(
-      new THREE.Mesh(S.eggG, this.bodyMat),
-      new THREE.Mesh(S.whiteG, S.white),
-      new THREE.Mesh(female ? S.blackGf : S.blackG, S.black),
-      new THREE.Mesh(female ? S.bowG : S.pinkG, S.pink),
-      new THREE.Mesh(female ? S.gearGf : S.gearGm, S.gear),
-    );
+    if (!human) {
+      egg.add(
+        new THREE.Mesh(S.eggG, this.bodyMat),
+        new THREE.Mesh(S.whiteG, S.white),
+        new THREE.Mesh(female ? S.blackGf : S.blackG, S.black),
+        new THREE.Mesh(female ? S.bowG : S.pinkG, S.pink),
+        new THREE.Mesh(female ? S.gearGf : S.gearGm, S.gear),
+      );
+    } else if (female) {
+      egg.add(
+        new THREE.Mesh(S.hSareeG, this.bodyMat), new THREE.Mesh(S.hBlouseG, S.gold), new THREE.Mesh(S.hSkinGf, S.skin),
+        new THREE.Mesh(S.hHairGf, S.hair), new THREE.Mesh(S.hBindiG, S.red),
+      );
+    } else {
+      egg.add(
+        new THREE.Mesh(S.hKurtaG, this.bodyMat), new THREE.Mesh(S.hSashG, S.cloth),
+        new THREE.Mesh(S.hSkinGm, S.skin), new THREE.Mesh(S.hHairGm, S.hair),
+      );
+    }
     g.add(egg);
 
-    this.footL = new THREE.Mesh(S.footG, S.gear);
-    this.footR = new THREE.Mesh(S.footG, S.gear);
-    this.footL.position.set(-0.42, 0.4, 0);
-    this.footR.position.set(0.42, 0.4, 0);
+    // legs / feet swing from the hip. A saree hides the legs, so the woman gets none.
+    const legless = human && female;
+    this.footL = legless ? new THREE.Group() : new THREE.Mesh(human ? S.hLegG : S.footG, human ? S.cloth : S.gear);
+    this.footR = legless ? new THREE.Group() : new THREE.Mesh(human ? S.hLegG : S.footG, human ? S.cloth : S.gear);
+    this.footL.position.set(-dim.footX, dim.hip, 0);
+    this.footR.position.set(dim.footX, dim.hip, 0);
     g.add(this.footL, this.footR);
 
     // arms + guns follow the view pitch
     this.arms = new THREE.Group();
-    this.arms.position.y = ARM_Y;
-    this.arms.add(new THREE.Mesh(S.armG, this.bodyMat));
+    this.arms.position.y = dim.armY;
+    if (!human) this.arms.add(new THREE.Mesh(S.armG, this.bodyMat));
+    else if (female) this.arms.add(new THREE.Mesh(S.hArmsGf, S.skin)); // bare arms
+    else this.arms.add(new THREE.Mesh(S.hSleeveG, this.bodyMat), new THREE.Mesh(S.hHandG, S.skin)); // kurta sleeves
     const mkGun = (side, glow) => {
       const gun = new THREE.Group();
-      gun.position.set(side * 0.8, -0.05, -0.9);
+      gun.position.set(side * dim.gunX, dim.gunY, dim.gunZ);
+      gun.scale.setScalar(dim.gunS);
       gun.add(new THREE.Mesh(S.gunG, S.gunMetal), new THREE.Mesh(S.barrelG, glow));
       this.arms.add(gun);
       return gun;
@@ -149,13 +203,14 @@ export class Avatar {
     g.add(this.floatRing);
 
     this.shield = new THREE.Mesh(S.shieldG, S.shieldMat);
-    this.shield.position.y = 1.3;
+    this.shield.position.y = dim.shieldY;
+    this.shield.scale.setScalar(dim.shield);
     this.shield.visible = false;
     g.add(this.shield);
 
     this.tag = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthWrite: false }));
     this.tag.scale.set(2.0, 0.5, 1);
-    this.tag.position.y = 3.05;
+    this.tag.position.y = dim.tagY;
     g.add(this.tag);
 
     g.visible = false;
@@ -230,8 +285,13 @@ export class Avatar {
 
     // crouch: the egg squashes down and bulges out
     const cr = (this.crouchAmt += (((this.flags & 8) ? 1 : 0) - this.crouchAmt) * Math.min(1, dt * 12));
-    this.egg.scale.set(1 + 0.12 * cr, 1 - 0.36 * cr, 1 + 0.12 * cr);
-    this.tag.position.y = 3.05 - 0.85 * cr;
+    const dim = this.dim;
+    this.egg.scale.set(1 + dim.sqXZ * cr, 1 - dim.sqY * cr, 1 + dim.sqXZ * cr);
+    if (this.look === 'human') { // legs fold with the body
+      this.footL.position.y = this.footR.position.y = dim.hip * (1 - dim.sqY * cr);
+      this.footL.scale.y = this.footR.scale.y = 1 - dim.sqY * cr;
+    }
+    this.tag.position.y = dim.tagY - dim.tagDrop * cr;
     this.arms.rotation.x = this.pitch;
 
     // waddle: feet swing and the egg rocks side to side
@@ -243,12 +303,12 @@ export class Avatar {
       this.phase += dt * sp * 1.5;
       const amt = Math.min(1, sp / 6);
       const sw = Math.sin(this.phase);
-      fl = sw * 0.9 * amt; fr = -sw * 0.9 * amt;
-      rock = sw * 0.13 * amt;
-      bounce = Math.abs(Math.cos(this.phase)) * 0.07 * amt;
+      fl = sw * dim.swing * amt; fr = -sw * dim.swing * amt;
+      rock = sw * dim.rock * amt;
+      bounce = Math.abs(Math.cos(this.phase)) * dim.bounce * amt;
     } else if (!onGround) {
       fl = 0.7; fr = -0.5; // feet dangle in the air
-      rock = Math.sin(now / 130) * 0.08;
+      rock = Math.sin(now / 130) * 0.6 * dim.rock;
     }
     this.footL.rotation.x += (fl - this.footL.rotation.x) * ease;
     this.footR.rotation.x += (fr - this.footR.rotation.x) * ease;
@@ -257,7 +317,7 @@ export class Avatar {
 
     for (const gk of ['L', 'P']) {
       this.recoil[gk] = Math.max(0, this.recoil[gk] - dt * 6);
-      (gk === 'L' ? this.gunL : this.gunR).position.z = -0.9 + this.recoil[gk] * 0.14;
+      (gk === 'L' ? this.gunL : this.gunR).position.z = dim.gunZ + this.recoil[gk] * 0.14 * dim.gunS;
     }
 
     this.shield.visible = now < this.protectUntil;
@@ -266,7 +326,7 @@ export class Avatar {
     this.floatRing.visible = lifted;
     if (lifted) {
       const pulse = (now / 300) % 1;
-      this.floatRing.scale.setScalar(0.8 + pulse * 0.6);
+      this.floatRing.scale.setScalar((0.8 + pulse * 0.6) * dim.ring);
       this.floatRing.position.y = 0.1 + pulse * 0.4;
       this.floatRing.material.opacity = 0.9 * (1 - pulse);
     }

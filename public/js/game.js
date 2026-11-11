@@ -77,6 +77,9 @@ export class Game {
     this.clock = new THREE.Clock();
     this.t = 0;
     this.shake = 0;
+    this.kickP = 0;   // view kick from firing
+    this.punchP = 0;  // view knocked off target when hit
+    this.punchY = 0;
     this.stepT = 0;
     this.endTime = 0;
     this.deathAt = 0;
@@ -219,7 +222,7 @@ export class Game {
     n.on('close', () => this.toMenu());
   }
 
-  avInfo(p) { return { name: p.name, colorHex: playerColor(p), sex: p.sex }; }
+  avInfo(p) { return { name: p.name, colorHex: playerColor(p), sex: p.sex, look: p.look }; }
 
   isEnemy(p) {
     if (!this.room || this.room.mode === 'dm') return true;
@@ -394,6 +397,10 @@ export class Game {
     this.ctrl.impulse(m.g, m.d);
     this.sfx.hurt(m.g);
     this.shake = Math.min(1, this.shake + (m.g === 'P' ? 0.6 : 0.3));
+    // being hit throws your aim off for a moment
+    const hard = m.g === 'P' ? 1.4 : 1;
+    this.punchP = Math.max(-0.25, Math.min(0.25, this.punchP + (0.05 + Math.random() * 0.04) * hard));
+    this.punchY = Math.max(-0.25, Math.min(0.25, this.punchY + (Math.random() < 0.5 ? -1 : 1) * (0.04 + Math.random() * 0.05) * hard));
     const av = this.avatars.get(m.by);
     let dx, dz;
     if (av && av.visible) { dx = av.pos.x - this.ctrl.pos.x; dz = av.pos.z - this.ctrl.pos.z; }
@@ -444,8 +451,9 @@ export class Game {
       const info = this.players.get(pid);
       if (!info || !this.isEnemy(info)) continue;
       const p = av.pos;
-      const top = (av.flags & 8) ? M.PLAYER.crouchHitbox : M.PLAYER.hitHeight; // crouched players are shorter targets
-      const t = M.rayAABB(o, d, p.x - M.PLAYER.hitHalf, p.y, p.z - M.PLAYER.hitHalf, p.x + M.PLAYER.hitHalf, p.y + top, p.z + M.PLAYER.hitHalf);
+      const body = M.bodyOf(av.look); // the target box matches the character (egg = wide, human = slim)
+      const top = (av.flags & 8) ? body.crouchH : body.h; // crouched players are shorter targets
+      const t = M.rayAABB(o, d, p.x - body.half, p.y, p.z - body.half, p.x + body.half, p.y + top, p.z + body.half);
       if (t !== null && t < best) { best = t; id = pid; }
     }
     return { id, point: new THREE.Vector3().copy(d).multiplyScalar(best).add(o) };
@@ -468,6 +476,7 @@ export class Game {
     const effective = target && !target.isProtected; // shielded players shrug hits off
     const muzzle = this.weapons.muzzleWorld(g, this.camera, this.v3);
     this.weapons.kick(g);
+    this.kickP += g === 'P' ? 0.035 : 0.014; // recoil: the view jumps up a little and settles back
     this.weapons.tracer(muzzle, hit.point, g);
     this.weapons.impact(hit.point, d, g, effective);
     this.sfx.shot(g, null);
@@ -523,7 +532,7 @@ export class Game {
 
     if (this.state === 'menu') {
       const a = this.t * 0.035;
-      this.camera.position.set(Math.cos(a) * 90, 38, Math.sin(a) * 72);
+      this.camera.position.set(Math.cos(a) * 100, 42, Math.sin(a) * 76);
       this.camera.lookAt(0, 0, 0);
       this.camera.fov = 60;
       this.camera.updateProjectionMatrix();
@@ -576,13 +585,17 @@ export class Game {
 
     // camera
     // eye height glides down/up when crouching
-    this.eyeH += ((c.crouching ? M.PLAYER.crouchEye : M.PLAYER.eye) - this.eyeH) * Math.min(1, dt * 12);
+    const myBody = M.bodyOf((this.players.get(this.myId) || {}).look); // humans see from human eye height
+    this.eyeH += ((c.crouching ? myBody.crouchEye : myBody.eye) - this.eyeH) * Math.min(1, dt * 12);
     this.dip = (this.dip || 0) * Math.exp(-dt * 9);
     this.roll = (this.roll || 0) + (-input.r * 0.014 - (this.roll || 0)) * Math.min(1, dt * 10); // lean a little when strafing
     if (this.alive || p.y > -45) this.camera.position.set(p.x, p.y + this.eyeH - this.dip, p.z);
     this.shake = Math.max(0, this.shake - dt * 1.8);
     const sh = this.shake * this.shake;
-    this.camera.rotation.set(this.pitch + (Math.random() - 0.5) * sh * 0.06, this.yaw + (Math.random() - 0.5) * sh * 0.06, this.roll);
+    this.kickP *= Math.exp(-dt * 14);
+    const pf = Math.exp(-dt * 4.5);
+    this.punchP *= pf; this.punchY *= pf;
+    this.camera.rotation.set(this.pitch + this.kickP + this.punchP + (Math.random() - 0.5) * sh * 0.06, this.yaw + this.punchY + (Math.random() - 0.5) * sh * 0.06, this.roll);
     const kbs = Math.hypot(c.kb.x, c.kb.z);
     const sprinting = input.sprint && input.f > 0 && c.onGround;
     const fov = 75 + (sprinting ? 5 : 0) + Math.min(12, kbs * 0.45);
