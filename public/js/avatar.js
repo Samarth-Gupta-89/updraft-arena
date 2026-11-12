@@ -198,8 +198,8 @@ export class Avatar {
     // sizes that differ between the two looks
     const human = this.look === 'human';
     const dim = (this.dim = human
-      ? { armY: 1.38, gunX: 0.2, gunY: -0.1, gunZ: -0.5, gunS: 0.55, tagY: 2.1, tagDrop: 0.5, sqY: 0.3, sqXZ: 0, swing: 0.7, rock: 0.04, bounce: 0.03, ring: 0.45, shield: 0.62, shieldY: 0.9, guardR: 0.84, hip: 0.9, footX: 0.1 }
-      : { armY: ARM_Y, gunX: 0.8, gunY: -0.05, gunZ: -0.9, gunS: 1, tagY: 3.05, tagDrop: 0.85, sqY: 0.36, sqXZ: 0.12, swing: 0.9, rock: 0.13, bounce: 0.07, ring: 1, shield: 1, shieldY: 1.3, guardR: 1.6, hip: 0.4, footX: 0.42 });
+      ? { armY: 1.38, gunX: 0.2, gunY: -0.1, gunZ: -0.5, gunS: 0.55, tagY: 2.1, tagDrop: 0.5, sqY: 0.3, sqXZ: 0, swing: 0.7, rock: 0.04, bounce: 0.03, ring: 0.45, shield: 0.62, shieldY: 0.9, guardR: 1.68, hip: 0.9, footX: 0.1 }
+      : { armY: ARM_Y, gunX: 0.8, gunY: -0.05, gunZ: -0.9, gunS: 1, tagY: 3.05, tagDrop: 0.85, sqY: 0.36, sqXZ: 0.12, swing: 0.9, rock: 0.13, bounce: 0.07, ring: 1, shield: 1, shieldY: 1.3, guardR: 3.2, hip: 0.4, footX: 0.42 });
 
     // the egg squashes down when crouching and wobbles when walking (pivot at the ground)
     const egg = (this.egg = new THREE.Group());

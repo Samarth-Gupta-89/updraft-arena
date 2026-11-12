@@ -2,7 +2,7 @@
 import { Controller } from './public/js/physics.js';
 import {
   ARENA, EDGES, GUNS, maxOf, PICKUP_RADIUS, WATER_LEVEL, KILL_Y,
-  heightAt, inArena, edgeDist, bodyOf, buildColliders, rayAABB, rayStatic,
+  heightAt, inArena, edgeDist, bodyOf, buildColliders, rayAABB, rayStatic, ROOFS,
 } from './public/js/shared/map.js';
 
 const COLLIDERS = buildColliders();
@@ -160,6 +160,15 @@ export function updateBot(room, pl, dt, api) {
   if (B.detourT > 0) { B.detourT -= dt; mx = B.detour.x; mz = B.detour.z; }
   const ml = Math.hypot(mx, mz);
   if (ml > 1) { mx /= ml; mz /= ml; }
+  // shoved out onto a rooftop: run straight at the nearest wall and jump when the roof runs out
+  const outside = !inArena(me[0], me[2]);
+  let roofJump = false;
+  if (outside && c.onGround) {
+    const w = nearestWall(me); // w.x, w.z point out of the arena, so the way back in is the opposite
+    mx = -w.x; mz = -w.z;
+    const ax = me[0] + mx * 0.35, az = me[2] + mz * 0.35;
+    roofJump = !ROOFS.some((r) => Math.abs(ax - r.x) < r.w / 2 && Math.abs(az - r.z) < r.d / 2);
+  }
 
   // ---------------------------------------------------------------- look
   let aim = null;
@@ -184,10 +193,10 @@ export function updateBot(room, pl, dt, api) {
   // ---------------------------------------------------------------- move (input is relative to facing)
   const s = Math.sin(B.yaw), co = Math.cos(B.yaw);
   const input = {
-    f: (-mx * s - mz * co) * L.speed,
-    r: (mx * co - mz * s) * L.speed,
-    jump: B.jumpNext || c.inWater,
-    sprint: L.sprint && !B.visible,
+    f: (-mx * s - mz * co) * (outside ? 1 : L.speed), // on a rooftop every bot runs at full speed, to make the jump
+    r: (mx * co - mz * s) * (outside ? 1 : L.speed),
+    jump: B.jumpNext || c.inWater || roofJump,
+    sprint: (L.sprint && !B.visible) || outside,
   };
   B.jumpNext = false;
   // pushed over the wall with an air dash in hand: dash back toward the middle

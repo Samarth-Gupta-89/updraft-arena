@@ -86,6 +86,12 @@ export const PHYS = {
 export const MATCH = {
   dmKills: 15,
   teamKills: 25,
+  // Team Battle is played in rounds, like Counter-Strike: knocked-out players wait for the next round.
+  // The room's creator picks how many rounds; ALL of them are played, and the team with more round wins takes the match.
+  roundChoices: [5, 10, 15],
+  teamRounds: 5,              // the default choice
+  roundMs: 3 * 60 * 1000,     // a round lasts 3 minutes at most; then the team with more players still in wins it
+  roundPauseMs: 3000,         // break between rounds
   timeMs: 7 * 60 * 1000,
   respawnMs: 3000,
   protectMs: 2000,
@@ -247,6 +253,31 @@ export const COVER = [
   C('tree', 6, 2, 0.6, 0.6, 9),
 ];
 
+// ---- flat rooftops just outside each wall. They are solid: a player shoved over the wall can land on one and
+// jump back in (the gap to the wall is a short jump, and the roofs stand a little higher than the wall).
+// The positions are fixed "random" picks, so the server and every player agree on them.
+export const ROOF_GAP = 0.4;
+export const ROOFS = [];
+EDGES.forEach((e, i) => {
+  const n = e.len > 90 ? 3 : 2;
+  for (let k = 0; k < n; k++) {
+    const r = (s) => noise2(i * 7.3 + k * 3.1 + 0.37, s + 0.61, 91);
+    const t = (k + 0.3 + r(1) * 0.4) / n;
+    const w = 9 + r(2) * 5, d = 8 + r(3) * 4, h = 4.7 + r(4) * 0.15; // just above the 4.5 m wall: anyone who clears the wall lands (or steps) onto the roof, and any jump clears the wall on the way back
+    // The walls are slanted but boxes are not, so one big box would leave a wide gap at one end.
+    // Each building is therefore six narrow strips side by side, each pushed up to ROOF_GAP from the wall's outer face.
+    const alongX = Math.abs(e.tx) > Math.abs(e.tz), parts = 6, pw = (alongX ? w : d) / parts;
+    const cx = e.ax + e.tx * e.len * t, cz = e.az + e.tz * e.len * t; // the spot on the wall this building faces
+    for (let j = 0; j < parts; j++) {
+      const off = (j - (parts - 1) / 2) * pw, sw = alongX ? pw : w, sd = alongX ? d : pw;
+      const wx = alongX ? cx + off : cx + (e.tx * off) / e.tz, wz = alongX ? cz + (e.tz * off) / e.tx : cz + off;
+      const reach = ARENA.wallT + ROOF_GAP + (Math.abs(e.nx) * sw + Math.abs(e.nz) * sd) / 2;
+      ROOFS.push(C('roof', wx - e.nx * reach, wz - e.nz * reach, sw, sd, h));
+    }
+  }
+});
+COVER.push(...ROOFS);
+
 // ---------------------------------------------------------------- spawns & pickups
 const faceCentre = (x, z) => Math.atan2(x, z);
 const spawnRow = (edge, ts, inset, yaw) => ts.map((t) => { const [x, z] = alongWall(edge, t, inset); return { x, z, yaw }; });
@@ -350,7 +381,7 @@ export function buildColliders() {
       type: c.type, ref: c, base,
       minX: c.x - w / 2, maxX: c.x + w / 2,
       minZ: c.z - d / 2, maxZ: c.z + d / 2,
-      minY: c.type === 'block' ? base - 1 : base, maxY: base + c.h * (c.type === 'rock' ? 0.92 : 1),
+      minY: c.type === 'roof' ? -40 : c.type === 'block' ? base - 1 : base, maxY: base + c.h * (c.type === 'rock' ? 0.92 : 1),
       noStand: c.type === 'tree',
     });
   }

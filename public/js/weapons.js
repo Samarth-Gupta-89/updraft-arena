@@ -100,7 +100,7 @@ export class Weapons {
     }
     // the shield takes the right gun's place while F is held
     this.shield = new THREE.Mesh(shieldGeometry(), shieldMaterial());
-    this.shield.scale.setScalar(0.21);
+    this.shield.scale.setScalar(0.42);
     this.shield.rotation.set(0.12, 0.3, 0);
     // the right hand and forearm holding it from behind (sizes are in shield units: its rim radius is 1)
     const skin = new THREE.MeshLambertMaterial({ color: 0xc48a5a });
@@ -264,7 +264,7 @@ export class Weapons {
     this.shieldT += ((this.shieldUp ? 1 : 0) - this.shieldT) * Math.min(1, dt * 16);
     this.guns.P.visible = this.shieldT < 0.5;
     this.shield.visible = this.shieldT > 0.03;
-    this.shield.position.set(0.25 + bx, -0.2 - by - (1 - this.shieldT) * 0.45, -0.44);
+    this.shield.position.set(0.38 + bx, -0.3 - by - (1 - this.shieldT) * 0.8, -0.52);
     // charging the SHOVER: its muzzle glows brighter and the gun trembles
     if (this.charge > 0) {
       const f = this.flash.P, gun = this.guns.P;

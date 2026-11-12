@@ -129,7 +129,7 @@ function newCode() {
 
 function roomInfo(room) {
   return {
-    code: room.code, mode: room.mode, hostId: room.hostId, state: room.state, scores: room.scores,
+    code: room.code, mode: room.mode, hostId: room.hostId, state: room.state, scores: room.scores, rounds: room.rounds, round: room.round,
     timeLeft: room.state === 'playing' ? Math.max(0, room.endsAt - now()) : 0,
     players: [...room.players.values()].map((p) => ({
       id: p.id, name: p.name, team: p.team, color: p.color, kills: p.kills, deaths: p.deaths, alive: p.alive,
@@ -178,7 +178,10 @@ function joinRoom(pl, room) {
   broadcastRoom(room);
   if (room.state === 'playing') {
     send(pl, matchMsg(room));
-    spawn(room, pl);
+    // Team Battle: someone joining mid-round waits for the next round, unless their team has nobody in this one
+    const teamInRound = room.mode === 'team' && [...room.players.values()].some((p) => p !== pl && p.team === pl.team && p.inRound);
+    pl.inRound = !teamInRound;
+    if (pl.inRound) spawn(room, pl);
   }
 }
 
@@ -205,9 +208,11 @@ function startMatch(room) {
   room.state = 'playing';
   room.saved = new Map();
   room.scores = { A: 0, B: 0 };
-  room.endsAt = now() + MATCH.timeMs;
+  room.round = 1;
+  room.endsAt = now() + (room.mode === 'team' ? MATCH.roundMs : MATCH.timeMs); // Team Battle: the clock is per round
   room.pickups = PICKUPS.map((p) => ({ ...p, active: true, respawnAt: 0 }));
-  for (const p of room.players.values()) Object.assign(p, { kills: 0, deaths: 0, alive: false, lastHit: null });
+  room.roundAt = 0;
+  for (const p of room.players.values()) Object.assign(p, { kills: 0, deaths: 0, alive: false, lastHit: null, inRound: true });
   broadcast(room, matchMsg(room));
   for (const p of room.players.values()) spawn(room, p);
   broadcastRoom(room);
@@ -247,21 +252,52 @@ function kill(room, pl) {
   const t = now();
   pl.alive = false;
   pl.deaths++;
-  pl.respawnAt = t + MATCH.respawnMs;
+  pl.respawnAt = room.mode === 'team' ? 0 : t + MATCH.respawnMs; // Team Battle: out until the next round
   const lh = pl.lastHit;
   let killer = null;
   if (lh && t - lh.time < MATCH.creditMs) {
     const k = room.players.get(lh.by);
     if (k && k !== pl && (room.mode === 'dm' || k.team !== pl.team)) {
       killer = k;
-      k.kills++;
-      if (room.mode === 'team') room.scores[k.team]++;
+      k.kills++; // in Team Battle the team's score is rounds won (see updateRound), not knockouts
     }
   }
   broadcast(room, { t: 'death', v: pl.id, k: killer ? killer.id : 0, g: killer ? lh.g : null });
   broadcastRoom(room);
   if (room.mode === 'dm' && killer && killer.kills >= MATCH.dmKills) endMatch(room, killer.id);
-  if (room.mode === 'team' && killer && room.scores[killer.team] >= MATCH.teamKills) endMatch(room, killer.team);
+}
+
+// Team Battle rounds, like Counter-Strike. A round ends when every player of one team who started it is out
+// (knocked out, left or away), or after MATCH.roundMs, when the team with more players still in wins it
+// (equal numbers: nobody scores). Every round the creator chose is played; then the team with more wins takes the match.
+function updateRound(room, t) {
+  if (room.roundAt) { if (t >= room.roundAt) startRound(room, t); return; }
+  const had = { A: 0, B: 0 }, left = { A: 0, B: 0 };
+  for (const p of room.players.values()) {
+    if (!p.inRound || !had.hasOwnProperty(p.team)) continue;
+    had[p.team]++;
+    if (p.alive) left[p.team]++;
+  }
+  let won;
+  if (had.A && !left.A) won = 'B';
+  else if (had.B && !left.B) won = 'A';
+  else if (t >= room.endsAt) won = left.A > left.B ? 'A' : left.B > left.A ? 'B' : null; // time is up
+  else return;
+  if (won) room.scores[won]++;
+  broadcast(room, { t: 'round', w: won, n: room.round, of: room.rounds });
+  broadcastRoom(room);
+  if (room.round >= room.rounds) endMatch(room, leader(room));
+  else room.roundAt = t + MATCH.roundPauseMs;
+}
+
+function startRound(room, t) {
+  room.roundAt = 0;
+  room.round++;
+  room.endsAt = t + MATCH.roundMs;
+  for (const pk of room.pickups) if (!pk.active) { pk.active = true; broadcast(room, { t: 'pk', id: pk.id, a: true }); }
+  broadcast(room, { t: 'rstart', n: room.round, of: room.rounds, timeLeft: MATCH.roundMs });
+  for (const p of room.players.values()) { p.inRound = true; spawn(room, p); }
+  broadcastRoom(room);
 }
 
 function leader(room) {
@@ -363,7 +399,8 @@ function handle(pl, m) {
   switch (m.t) {
     case 'create': {
       const mode = m.mode === 'team' ? 'team' : 'dm';
-      const r = { code: newCode(), mode, hostId: 0, state: 'lobby', players: new Map(), scores: { A: 0, B: 0 }, pickups: [], endsAt: 0, emptySince: 0, look: pl.myLook || 'egg' }; // everyone in the room gets the creator's character type
+      const r = { code: newCode(), mode, hostId: 0, state: 'lobby', players: new Map(), scores: { A: 0, B: 0 }, pickups: [], endsAt: 0, emptySince: 0, look: pl.myLook || 'egg',
+        rounds: MATCH.roundChoices.includes(Number(m.rounds)) ? Number(m.rounds) : MATCH.teamRounds, round: 0 }; // everyone in the room gets the creator's character type
       rooms.set(r.code, r);
       joinRoom(pl, r);
       break;
@@ -403,7 +440,10 @@ function handle(pl, m) {
       pl.hiddenSince = m.v ? 0 : now();
       break;
     case 'back': // tab became visible again after being away
-      if (room && room.state === 'playing' && pl.away) spawn(room, pl);
+      if (room && room.state === 'playing' && pl.away) {
+        if (room.mode === 'team') pl.away = false; // back, but out until the next round
+        else spawn(room, pl);
+      }
       break;
     case 'leave':
       leaveRoom(pl);
@@ -533,6 +573,7 @@ setInterval(() => {
         }
         if (p.isBot) updateBot(room, p, dt, api);
       }
+      if (room.mode === 'team' && room.state === 'playing') updateRound(room, t);
       if (room.state !== 'playing') continue; // a bot knockout can end the match
       for (const pk of room.pickups) {
         if (!pk.active && t >= pk.respawnAt) { pk.active = true; broadcast(room, { t: 'pk', id: pk.id, a: true }); }
@@ -540,7 +581,7 @@ setInterval(() => {
       const ps = [];
       for (const p of room.players.values()) if (p.alive) ps.push([p.id, r2(p.p[0]), r2(p.p[1]), r2(p.p[2]), r3(p.ya), r3(p.pi), p.f | 0]);
       broadcast(room, { t: 'snap', ts: t, ps }); // ts: clients space the snapshots by server time
-      if (t >= room.endsAt) endMatch(room, leader(room));
+      if (room.mode !== 'team' && t >= room.endsAt) endMatch(room, leader(room)); // Team Battle ends after its last round instead
     } else if (room.state === 'ended' && t >= room.lobbyAt) {
       room.state = 'lobby';
       broadcastRoom(room);

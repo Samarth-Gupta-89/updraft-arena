@@ -221,6 +221,8 @@ export class Game {
     n.on('snap', (m) => this.onSnap(m.ps, m.ts));
     n.on('spawn', (m) => this.onSpawn(m));
     n.on('death', (m) => this.onDeath(m));
+    n.on('round', (m) => { if (this.state === 'play') this.hud.center(m.w ? `${M.TEAMS[m.w].name} team wins round ${m.n}` : `Round ${m.n} is a draw`, m.n < m.of ? 'Next round starts in a moment' : ''); });
+    n.on('rstart', (m) => { this.endTime = performance.now() + m.timeLeft; if (this.ann) this.ann.oneMinute = false; if (this.state === 'play') this.hud.popup(`ROUND ${m.n} OF ${m.of}`, '#ffe08a'); });
     n.on('imp', (m) => this.onImpulse(m));
     n.on('shot', (m) => this.onShot(m));
     n.on('sh', (m) => { this.shield.v = m.v; this.shield.broken = !!m.b; this.hud.setShield(m.v, !!m.b, this.shieldUp); });
@@ -271,6 +273,7 @@ export class Game {
     this.hud.show(true);
     this.hud.setAmmo(this.ammo);
     if (this.room) this.hud.setScores(this.room, this.myId);
+    this.hud.showMap(m.mode === 'team'); // the minimap is for Team Battle only
     this.inputActive = document.pointerLockElement === this.canvas;
     this.everLocked = this.inputActive;
     this.hud.showPlayOverlay(!this.inputActive, 'Click to play');
@@ -352,6 +355,7 @@ export class Game {
     if (m.v === this.myId) {
       this.alive = false;
       this.deathAt = performance.now();
+      this.specCleared = false;
       this.fireHeld.L = this.fireHeld.P = false;
       this.sfx.death();
       this.hud.center(k ? `Knocked out by ${k.name}` : 'You fell out of the arena', '');
@@ -652,6 +656,35 @@ export class Game {
     const pf = Math.exp(-dt * 4.5);
     this.punchP *= pf; this.punchY *= pf;
     this.camera.rotation.set(this.pitch + this.kickP + this.punchP + (Math.random() - 0.5) * sh * 0.06, this.yaw + this.punchY + (Math.random() - 0.5) * sh * 0.06, this.roll);
+    // Team Battle, knocked out: watch through the eyes of a team mate who is still in.
+    // Left click or Space switches to the next one. Only your own team can be watched.
+    const meP = this.players.get(this.myId);
+    let spec = null, specId = 0;
+    if (!this.alive && this.state === 'play' && meP && meP.team && this.deathAt && now - this.deathAt > 1200) {
+      const mates = [];
+      for (const [id, av] of this.avatars) { const o = this.players.get(id); if (o && o.team === meP.team && av.visible) mates.push(id); }
+      const press = this.fireHeld.L || k.has('Space');
+      const next = press && !this.specHeld;
+      this.specHeld = press;
+      if (mates.length) {
+        let i = mates.indexOf(this.specId);
+        if (i < 0) i = 0; else if (next) i = (i + 1) % mates.length;
+        specId = mates[i];
+        spec = this.avatars.get(specId);
+      }
+    }
+    if (specId !== this.specId) { // put the body of the player we stopped watching back
+      const old = this.avatars.get(this.specId);
+      if (old) old.group.visible = old.visible;
+      this.specId = specId;
+    }
+    this.spec = spec;
+    if (spec) {
+      spec.group.visible = false; // we are inside their head: do not draw their body
+      const b = M.bodyOf(spec.look);
+      this.camera.position.set(spec.pos.x, spec.pos.y + ((spec.flags & 8) ? b.crouchEye : b.eye), spec.pos.z);
+      this.camera.rotation.set(spec.pitch, spec.yaw, 0);
+    }
     const kbs = Math.hypot(c.kb.x, c.kb.z);
     const sprinting = input.sprint && input.f > 0 && c.onGround;
     const fov = 75 + (sprinting ? 5 : 0) + Math.min(12, kbs * 0.45);
@@ -698,6 +731,14 @@ export class Game {
     }
 
     // HUD
+    // Team Battle minimap, redrawn 10 times a second: me and my team mates who are still in (never the enemy)
+    const meInfo = this.players.get(this.myId);
+    if (meInfo && meInfo.team && now - (this.mapAt || 0) > 100) {
+      this.mapAt = now;
+      const mates = [];
+      for (const [id, av] of this.avatars) { const o = this.players.get(id); if (o && o.team === meInfo.team && av.visible) mates.push(av.pos); }
+      this.hud.drawMap(M, this.spec ? this.spec.pos : p, this.spec ? this.spec.yaw : this.yaw, mates, M.TEAMS[meInfo.team].color);
+    }
     this.hud.setTimer(this.endTime - now);
     if (this.ann && !this.ann.oneMinute && this.endTime - now < 60000) { this.ann.oneMinute = true; this.sfx.voice('one_minute'); }
     this.hud.setLifted(this.alive && c.floating);
@@ -705,8 +746,10 @@ export class Game {
     this.hud.setWater(cam.y < M.WATER_LEVEL && M.inArena(cam.x, cam.z) && M.heightAt(cam.x, cam.z) < M.WATER_LEVEL);
     if (!this.alive && this.deathAt) {
       const left = Math.max(0, Math.ceil((this.deathAt + M.MATCH.respawnMs - now) / 1000));
-      this.hud.sub(left > 0 ? `Respawning in ${left}…` : 'Respawning…');
-      this.hud.setFade(Math.min(0.65, (now - this.deathAt) / 1800));
+      const team = this.room && this.room.mode === 'team'; // Team Battle: no respawn until the round ends
+      this.hud.sub(this.spec ? `Watching ${this.spec.name} — click or Space for the next team mate` : team ? 'Out until the next round' : left > 0 ? `Respawning in ${left}…` : 'Respawning…');
+      this.hud.setFade(this.spec ? 0 : Math.min(team ? 0.3 : 0.65, (now - this.deathAt) / 1800));
+      if (this.spec && !this.specCleared) { this.specCleared = true; this.hud.center('', ''); } // clear the big knocked-out text off the view
       this.hud.status('');
     } else if (this.alive) {
       if (!M.inArena(p.x, p.z)) this.hud.status('OUT OF THE ARENA!', 'danger');

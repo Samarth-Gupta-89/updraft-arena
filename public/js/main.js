@@ -105,7 +105,15 @@ net.on('err', (m) => {
 
 // ------------------------------------------------------------------ menu
 $('#btn-dm').addEventListener('click', () => net.send({ t: 'create', mode: 'dm' }));
-$('#btn-team').addEventListener('click', () => net.send({ t: 'create', mode: 'team' }));
+// Team Battle: first click shows the rounds choice, then a rounds button creates the room
+$('#btn-team').addEventListener('click', () => { $('#rounds-pick').classList.remove('hidden'); $('#btn-team').classList.add('picked'); });
+$('#rounds-pick').addEventListener('click', (e) => {
+  const n = Number(e.target.dataset && e.target.dataset.rounds);
+  if (!n) return;
+  $('#rounds-pick').classList.add('hidden');
+  $('#btn-team').classList.remove('picked');
+  net.send({ t: 'create', mode: 'team', rounds: n });
+});
 $('#form-join').addEventListener('submit', (e) => {
   e.preventDefault();
   let code = $('#in-code').value.trim();
@@ -156,7 +164,7 @@ function renderLobby() {
   if (!room) return;
   const mode = MODES[room.mode];
   const isHost = room.hostId === myId;
-  $('#lobby-mode').textContent = mode.label;
+  $('#lobby-mode').textContent = mode.label + (room.mode === 'team' ? ` · ${room.rounds} rounds` : '');
   $('#lobby-code').textContent = room.code;
   $('#share-link').value = shareLink();
   $('#share-note').classList.toggle('hidden', !isLocalHost);

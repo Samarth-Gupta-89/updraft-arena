@@ -167,7 +167,7 @@ export function buildWorld(renderer, scene) {
 
   // ---------------------------------------------------------------- cover (merged per material)
   {
-    const crates = [], conts = [], posts = [], barriers = [], rocks = [], trunks = [], leaves = [], blocks = [], stones = [];
+    const crates = [], conts = [], posts = [], barriers = [], rocks = [], trunks = [], leaves = [], blocks = [], stones = [], roofWalls = [], roofTops = [];
     const CONT_COLORS = [0x9b3b2b, 0x2f5f8f, 0x3f7350, 0xb98a35];
     let rockSeed = 1;
     for (const c of colliders) {
@@ -195,6 +195,11 @@ export function buildWorld(renderer, scene) {
       } else if (ref.type === 'block') {
         // room / hiding wall: starts 1 m under the ground so it never floats above a dip
         blocks.push(tiledBox(ref.w, ref.h + 1, ref.d, 2.5).translate(x, c.base + (ref.h - 1) / 2, z));
+      } else if (ref.type === 'roof') {
+        // landable rooftop outside the wall: a white-washed building with a flat terracotta roof
+        // the walls stop just under the roof slab (two surfaces at the same height flicker)
+        roofWalls.push(tiledBox(ref.w, ref.h + 39.85, ref.d, 3).translate(x, (ref.h - 0.15 - 40) / 2, z));
+        roofTops.push(tiledBox(ref.w, 0.2, ref.d, 2).translate(x, ref.h - 0.1, z));
       } else if (ref.type === 'stone') {
         stones.push(tiledBox(ref.w, ref.h + 1, ref.d, 2.5).translate(x, c.base + (ref.h - 1) / 2, z));
       } else if (ref.type === 'nandi') {
@@ -218,11 +223,13 @@ export function buildWorld(renderer, scene) {
     scene.add(merged(rocks, new THREE.MeshLambertMaterial({ map: TX.rock(), color: 0xcfc6b8 })));
     scene.add(merged(blocks, new THREE.MeshLambertMaterial({ map: plasterTex, color: 0xfff1dc }))); // white-washed walls
     scene.add(merged(stones, new THREE.MeshLambertMaterial({ map: concTex, color: 0x9a968e })));
+    scene.add(merged(roofWalls, new THREE.MeshLambertMaterial({ map: plasterTex, color: 0xfff1dc })));
+    scene.add(merged(roofTops, new THREE.MeshLambertMaterial({ map: tileTex })));
     scene.add(merged(trunks, new THREE.MeshLambertMaterial({ map: TX.bark() })));
     scene.add(merged(leaves, new THREE.MeshLambertMaterial({ color: 0x4a7a30, flatShading: true, side: THREE.DoubleSide })));
   }
 
-  buildSurroundings(scene, plasterTex, tileTex);
+  buildSurroundings(scene);
 
   // nothing built above ever moves, so three.js need not recompute its placement every frame
   for (const o of scene.children) if (o.isMesh || o.isInstancedMesh) { o.updateMatrix(); o.matrixAutoUpdate = false; }
@@ -275,29 +282,19 @@ function palm(trunks, leaves, x, z, baseY, topY) {
 }
 
 // What you see over the wall, as at the Isha Yoga Center: the brick dome of the Dhyanalinga to the west,
-// tile-roofed buildings, coconut groves all round and the Velliangiri hills behind. Scenery only (no collisions);
-// it stands a few metres clear of the wall, so anyone pushed out still falls past it.
-function buildSurroundings(scene, plasterTex, tileTex) {
+// coconut groves all round and the Velliangiri hills behind. Scenery only (no collisions).
+// The buildings right outside the wall are the solid, landable rooftops (ROOFS in the shared map).
+function buildSurroundings(scene) {
   const DEEP = -40; // how far down the bases go
   const out = (edge, t, dist) => { const e = M.EDGES[edge]; return [e.ax + e.tx * e.len * t - e.nx * dist, e.az + e.tz * e.len * t - e.nz * dist, Math.atan2(-e.tz, e.tx)]; };
-  const wallsG = [], roofsG = [], domeG = [], trunks = [], leaves = [], solid = [];
-  const building = (x, z, ang, w, d, wallH, roofH) => {
-    wallsG.push(tiledBox(w, wallH - DEEP, d, 3).rotateY(ang).translate(x, (wallH + DEEP) / 2, z));
-    const k = 0.7071;
-    roofsG.push(new THREE.ConeGeometry(1, roofH, 4, 1).rotateY(Math.PI / 4).scale((w / 2 + 1) / k, 1, (d / 2 + 1) / k).rotateY(ang).translate(x, wallH + roofH / 2, z));
-    solid.push([x, z, Math.max(w, d) / 2 + 2]);
-  };
-  // the Dhyanalinga dome, beyond the west wall (the Nandi faces it)
-  const [dx, dz] = out(3, 0.52, 30);
+  const domeG = [], trunks = [], leaves = [], solid = [];
+  // The Dhyanalinga dome, beyond the west wall (the Nandi faces it). It is the only building nobody can stand on,
+  // so it stands far enough away that a knocked-out player cannot reach it. Every building near the wall is solid.
+  const [dx, dz] = out(3, 0.52, 62);
   domeG.push(new THREE.SphereGeometry(13, 28, 12, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 0.8, 1).translate(dx, 3, dz));
   domeG.push(new THREE.CylinderGeometry(13.2, 13.2, 3 - DEEP, 28).translate(dx, (3 + DEEP) / 2, dz));
   solid.push([dx, dz, 16]);
-  { const [x, z, a] = out(3, 0.52, 12); building(x, z, a, 16, 7, 5.5, 2.6); }   // its entrance hall
-  { const [x, z, a] = out(1, 0.55, 11); building(x, z, a, 44, 10, 6, 3.4); }    // long pavilion along the east side
-  { const [x, z, a] = out(0, 0.25, 12); building(x, z, a, 26, 10, 5.5, 3); }    // north side
-  { const [x, z, a] = out(0, 0.72, 13); building(x, z, a, 22, 11, 6.5, 3.2); }
-  { const [x, z, a] = out(2, 0.3, 12); building(x, z, a, 24, 9, 5.5, 3); }      // south side
-  { const [x, z, a] = out(2, 0.75, 14); building(x, z, a, 18, 10, 6, 3); }
+  for (const r of M.ROOFS) solid.push([r.x, r.z, Math.max(r.w, r.d) / 2 + 1.5]); // no palms growing through the landable rooftops
   // coconut groves
   let n = 0;
   M.EDGES.forEach((e, edge) => {
@@ -311,8 +308,6 @@ function buildSurroundings(scene, plasterTex, tileTex) {
   });
   // drawn after the yard (renderOrder), so pixels hidden behind the wall are skipped instead of drawn twice
   const far = (mesh, order = 3) => { mesh.renderOrder = order; scene.add(mesh); };
-  far(merged(wallsG, new THREE.MeshLambertMaterial({ map: plasterTex, color: 0xfff1dc })));
-  far(merged(roofsG, new THREE.MeshLambertMaterial({ map: tileTex, flatShading: true })));
   far(merged(domeG, new THREE.MeshLambertMaterial({ color: 0xc46a3c })));
   far(merged(trunks, new THREE.MeshLambertMaterial({ color: 0x6b5a48 })));
   far(merged(leaves, new THREE.MeshLambertMaterial({ color: 0x4a7a30, flatShading: true, side: THREE.DoubleSide })));

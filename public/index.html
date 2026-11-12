@@ -53,8 +53,15 @@
         <button id="btn-team" class="mode-card">
           <span class="mode-title">Team Battle</span>
           <span class="mode-sub">Red vs Blue · 5 per team</span>
-          <span class="mode-desc">Knock the other team out. First team to 25 wins.</span>
+          <span class="mode-desc">Played in rounds, like Counter-Strike: if you are knocked out, you wait for the next round. Most rounds won takes the match.</span>
         </button>
+      </div>
+      <div id="rounds-pick" class="rounds-pick hidden">
+        <span>Team Battle — how many rounds?</span>
+        <button class="btn small" data-rounds="5">5 rounds</button>
+        <button class="btn small" data-rounds="10">10 rounds</button>
+        <button class="btn small" data-rounds="15">15 rounds</button>
+        <small>All rounds are played · 3 minutes each at most</small>
       </div>
       <form id="form-join" class="join-row">
         <input id="in-code" placeholder="Have a room code or link? Paste it here" maxlength="200">
@@ -99,10 +106,11 @@
         <div><kbd class="lift">Left click</kbd> LIFTER — launches them up (keeps stacking)</div>
         <div><kbd class="push">Right click</kbd> SHOVER — knocks them back. Hold, then release: CHARGED shot (5 ammo, double knockback)</div>
         <div><b>Headshot</b> — hit the head for double lift or double knockback</div>
+        <div><b>Team Battle</b> — when you are out, you watch a team mate: click or <kbd>Space</kbd> switches</div>
         <div><kbd>Tab</kbd> scores · <kbd>Esc</kbd> pause (host: add bots)</div>
         <label class="sens">Mouse sensitivity <input id="sens" class="sens-input" type="range" min="6" max="60" step="1"></label>
       </div>
-      <p class="tip">Tip: lift a player above the wall, then shove them over it. Anyone who falls out of the arena is knocked out. Green power-ups in the rooms give air dashes: they can fly you back in.</p>
+      <p class="tip">Tip: lift a player above the wall, then shove them over it. Anyone who falls out of the arena is knocked out — unless they land on a rooftop outside and jump back in. Green power-ups in the rooms give air dashes: they can fly you back in.</p>
     </section>
 
     <section id="screen-disconnected" class="screen panel hidden">
@@ -115,6 +123,7 @@
   <!-- ============ in-game HUD ============ -->
   <div id="hud" class="hidden">
     <div id="fps"></div>
+    <canvas id="minimap" width="170" height="120" class="hidden"></canvas>
     <div id="vignette"></div>
     <div id="water-tint"></div>
     <div id="fade"></div>

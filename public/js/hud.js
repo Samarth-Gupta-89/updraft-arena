@@ -87,7 +87,7 @@ export class Hud {
       this.scoreA.innerHTML = me ? `<span class="tname">YOU</span> <b>${me.kills}</b>` : '';
       this.scoreB.innerHTML = best ? `<b>${best.kills}</b> <span class="tname" style="color:${best.color}">${esc(best.name.toUpperCase())}</span>` : '';
     }
-    $('#goal').textContent = room.mode === 'team' ? `First to ${MATCH.teamKills}` : `First to ${MATCH.dmKills}`;
+    $('#goal').textContent = room.mode === 'team' ? `Round ${Math.max(1, room.round || 1)} of ${room.rounds}` : `First to ${MATCH.dmKills}`;
     if (this.boardOpen) this.showScoreboard(true, room, myId);
   }
 
@@ -148,6 +148,32 @@ export class Hud {
     this.shieldEl.classList.toggle('broken', broken);
     this.shieldEl.classList.toggle('up', up);
     this.gunEl.P.classList.toggle('locked', up);
+  }
+  // Team Battle minimap (top-left): the yard, the ponds, the Nandi, you (white arrow) and your team mates (dots).
+  // Enemies are never drawn. Hidden in Deathmatch.
+  showMap(v) { this.mapEl = this.mapEl || $('#minimap'); this.mapEl.classList.toggle('hidden', !v); }
+  drawMap(M, me, yaw, mates, color) {
+    const cv = this.mapEl || (this.mapEl = $('#minimap')), g = cv.getContext('2d');
+    const k = (cv.width - 12) / (M.ARENA.halfX * 2), X = (x) => cv.width / 2 + x * k, Z = (z) => cv.height / 2 + z * k;
+    g.clearRect(0, 0, cv.width, cv.height);
+    g.beginPath();
+    M.ARENA.poly.forEach(([x, z], i) => (i ? g.lineTo(X(x), Z(z)) : g.moveTo(X(x), Z(z))));
+    g.closePath();
+    g.fillStyle = 'rgba(190, 182, 160, 0.28)'; g.fill();
+    g.strokeStyle = 'rgba(255, 255, 255, 0.7)'; g.lineWidth = 1.5; g.stroke();
+    g.fillStyle = 'rgba(80, 150, 120, 0.8)';
+    for (const p of M.PONDS) { g.beginPath(); g.ellipse(X(p.x), Z(p.z), p.rx * k * 0.9, p.rz * k * 0.9, 0, 0, Math.PI * 2); g.fill(); }
+    g.fillStyle = '#15171a'; g.fillRect(X(M.NANDI.x) - 4, Z(M.NANDI.z) - 2.5, 8, 5);
+    g.fillStyle = color;
+    for (const m of mates) { g.beginPath(); g.arc(X(m.x), Z(m.z), 3.2, 0, Math.PI * 2); g.fill(); }
+    // me: an arrow pointing where I look
+    g.save();
+    g.translate(X(me.x), Z(me.z));
+    g.rotate(-yaw);
+    g.beginPath(); g.moveTo(0, -6); g.lineTo(4.2, 4.5); g.lineTo(0, 2.2); g.lineTo(-4.2, 4.5); g.closePath();
+    g.fillStyle = '#fff'; g.fill();
+    g.strokeStyle = color; g.lineWidth = 1.2; g.stroke();
+    g.restore();
   }
   setLifted(v) { if (v !== this.lifted) { this.lifted = v; this.vignette.classList.toggle('on', v); } }
   setWater(v) { if (v !== this.water) { this.water = v; this.waterEl.classList.toggle('on', v); } }
