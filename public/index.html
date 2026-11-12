@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/style.css">
   <script type="importmap">
-    { "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/examples/jsm/" } }
+    { "imports": { "three": "/vendor/three/build/three.module.min.js", "three/addons/": "/vendor/three/examples/jsm/" } }
   </script>
 </head>
 <body>
@@ -37,6 +37,7 @@
           <label><input type="radio" name="look" value="egg" checked> Egg</label>
           <label><input type="radio" name="look" value="human"> Human (Indian dress)</label>
         </div>
+        <p class="look-note">Everyone in a room plays as the character type picked by the person who created it.</p>
         <button id="btn-login" class="btn primary" type="submit">Continue</button>
       </form>
     </section>
@@ -93,9 +94,11 @@
         <div><kbd>W A S D</kbd> move</div>
         <div><kbd>Space</kbd> jump</div>
         <div><kbd>Shift</kbd> sprint · <kbd>C</kbd> crouch</div>
+        <div><kbd>F</kbd> hold — SHIELD: stops 10 shots from the front, then recharges. Only the LIFTER fires while it is up.</div>
         <div><kbd class="dash">Shift</kbd> in the air — AIR DASH (needs the green power-up)</div>
         <div><kbd class="lift">Left click</kbd> LIFTER — launches them up (keeps stacking)</div>
-        <div><kbd class="push">Right click</kbd> SHOVER — knocks them back</div>
+        <div><kbd class="push">Right click</kbd> SHOVER — knocks them back. Hold, then release: CHARGED shot (5 ammo, double knockback)</div>
+        <div><b>Headshot</b> — hit the head for double lift or double knockback</div>
         <div><kbd>Tab</kbd> scores · <kbd>Esc</kbd> pause (host: add bots)</div>
         <label class="sens">Mouse sensitivity <input id="sens" class="sens-input" type="range" min="6" max="60" step="1"></label>
       </div>
@@ -111,6 +114,7 @@
 
   <!-- ============ in-game HUD ============ -->
   <div id="hud" class="hidden">
+    <div id="fps"></div>
     <div id="vignette"></div>
     <div id="water-tint"></div>
     <div id="fade"></div>
@@ -139,6 +143,7 @@
       <div class="gun-count"><b id="ammo-P">30</b><span>/30</span></div>
       <div class="gun-bar"><span id="bar-P"></span></div>
     </div>
+    <div id="shield"><b id="shield-n">10</b> SHIELD · hold <kbd>F</kbd></div>
     <div id="dash"><b id="dash-n">0</b> AIR DASH · <kbd>Shift</kbd> in the air</div>
     <div id="scoreboard" class="hidden"></div>
   </div>

@@ -118,6 +118,48 @@ export function concrete() {
   return toTex(c);
 }
 
+// ---------------------------------------------------------------- granite paving slabs (neutral, multiplied by vertex colour)
+export function paving() {
+  const r = rng(31);
+  const tone = Array.from({ length: 16 }, () => (r() - 0.5) * 26);
+  const [c, g] = fill(512, (u, v) => {
+    const slab = tone[(Math.floor(u * 4) % 4) + (Math.floor(v * 4) % 4) * 4];
+    const speck = pnoise(u * 256, v * 256, 256, 12), n = tfbm(u, v, 6, 4, 14);
+    const l = 205 + slab + (n - 0.5) * 30 + (speck - 0.5) * 34;
+    return [clamp255(l), clamp255(l - 2), clamp255(l - 8)];
+  });
+  g.strokeStyle = 'rgba(70,66,58,0.55)';
+  g.lineWidth = 3;
+  for (let k = 0; k < 4; k++) {
+    g.beginPath(); g.moveTo(0, k * 128 + 1); g.lineTo(512, k * 128 + 1); g.stroke();
+    g.beginPath(); g.moveTo(k * 128 + 1, 0); g.lineTo(k * 128 + 1, 512); g.stroke();
+  }
+  return toTex(c, { repeat: [28, 21] });
+}
+
+// ---------------------------------------------------------------- lime-washed plaster (compound walls, buildings)
+export function plaster() {
+  const [c] = fill(256, (u, v) => {
+    const n = tfbm(u, v, 4, 4, 41), stain = tfbm(u, v, 2, 3, 43);
+    let l = 232 + (n - 0.5) * 26;
+    if (stain > 0.64) l -= (stain - 0.64) * 90;
+    return [clamp255(l), clamp255(l - 4), clamp255(l - 16)];
+  });
+  return toTex(c);
+}
+
+// ---------------------------------------------------------------- terracotta roof tiles
+export function roofTiles() {
+  const [c, g] = fill(256, (u, v) => {
+    const row = (v * 8) % 1, colm = (u * 12 + (Math.floor(v * 8) % 2) * 0.5) % 1;
+    const n = tfbm(u, v, 6, 3, 51);
+    let l = 1 - row * 0.28 - (colm < 0.12 ? 0.22 : 0) + (n - 0.5) * 0.25;
+    return [clamp255(196 * l), clamp255(92 * l), clamp255(52 * l)];
+  });
+  void g;
+  return toTex(c);
+}
+
 // ---------------------------------------------------------------- hazard stripes
 export function hazard() {
   const [c, g] = makeCanvas(256, 64);

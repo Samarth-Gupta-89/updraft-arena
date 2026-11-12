@@ -3,11 +3,12 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import {
   SPAWNS, DM_SPAWNS, PICKUPS, MAX_AMMO, maxOf, giveOf, fullAmmo, PICKUP_RESPAWN_MS, PICKUP_RADIUS,
-  KILL_Y, GUNS, MATCH, MODES, DM_COLORS, heightAt,
+  KILL_Y, GUNS, MATCH, MODES, DM_COLORS, heightAt, SHIELD, shieldBlocks, headFrom, HEADSHOT_MULT, CHARGE,
 } from './public/js/shared/map.js';
 import { BOT_LEVELS, botName, makeBrain, resetBrain, updateBot } from './bots.js';
 
@@ -24,6 +25,9 @@ const MIME = {
   '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.png': 'image/png',
   '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg',
 };
+
+const ZIP_EXT = new Set(['.html', '.js', '.css', '.json', '.svg']);
+const zipCache = new Map();
 
 // The laptop's address on the local network, so a host on localhost can share a link friends on the same Wi-Fi can open.
 function lanAddress() {
@@ -65,7 +69,22 @@ const server = http.createServer((req, res) => {
   if (!file) { res.writeHead(403).end(); return; }
   fs.stat(file, (err, st) => {
     if (err || !st.isFile()) { res.writeHead(404, { 'content-type': 'text/plain' }).end('Not found'); return; }
-    res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache' });
+    // the browser keeps a copy and only asks "has it changed?" (a tiny 304 reply when it has not)
+    const etag = `"${st.size}-${Math.round(st.mtimeMs)}"`;
+    const ext = path.extname(file);
+    const head = { 'content-type': MIME[ext] || 'application/octet-stream', 'cache-control': 'no-cache', etag };
+    if (req.headers['if-none-match'] === etag) { res.writeHead(304, head).end(); return; }
+    // text files are sent gzipped (about 4x smaller); each is compressed once and kept in memory
+    if (ZIP_EXT.has(ext) && /\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
+      let hit = zipCache.get(file);
+      if (!hit || hit.etag !== etag) {
+        try { hit = { etag, body: zlib.gzipSync(fs.readFileSync(file), { level: 9 }) }; } catch { res.writeHead(500).end(); return; }
+        zipCache.set(file, hit);
+      }
+      res.writeHead(200, { ...head, 'content-encoding': 'gzip', vary: 'Accept-Encoding', 'content-length': hit.body.length }).end(hit.body);
+      return;
+    }
+    res.writeHead(200, head);
     fs.createReadStream(file).pipe(res);
   });
 });
@@ -114,7 +133,7 @@ function roomInfo(room) {
     timeLeft: room.state === 'playing' ? Math.max(0, room.endsAt - now()) : 0,
     players: [...room.players.values()].map((p) => ({
       id: p.id, name: p.name, team: p.team, color: p.color, kills: p.kills, deaths: p.deaths, alive: p.alive,
-      bot: p.isBot ? p.botLevel : null, sex: p.sex || 'm', look: p.look || 'egg',
+      bot: p.isBot ? p.botLevel : null, sex: p.sex || 'm', look: room.look,
     })),
   };
 }
@@ -129,6 +148,7 @@ function teamCount(room, team) {
 function joinRoom(pl, room) {
   leaveRoom(pl);
   pl.room = room;
+  pl.look = room.look; // eggs and humans are never mixed in one room
   // two players can't share a name: the second "Sam" becomes "Sam 2"
   const taken = new Set([...room.players.values()].map((p) => p.name));
   const base = pl.baseName || pl.name;
@@ -215,7 +235,12 @@ function spawn(room, pl) {
   if (pl.isBot) resetBrain(pl.bot, pl.p, s.yaw);
   broadcast(room, { t: 'spawn', id: pl.id, p: pl.p, ya: s.yaw, prot: MATCH.protectMs });
   send(pl, { t: 'ammo', L: pl.ammo.L, P: pl.ammo.P, D: pl.ammo.D });
+  Object.assign(pl, { sh: SHIELD.max, shBroken: false, shAt: t }); // a fresh shield every life
+  sendShield(pl);
 }
+
+const sendShield = (pl) => { if (!pl.isBot) send(pl, { t: 'sh', v: pl.sh, b: pl.shBroken }); };
+const shieldUp = (pl) => (pl.f & 16) !== 0 && !pl.shBroken && pl.sh >= 1;
 
 function kill(room, pl) {
   if (!pl.alive || room.state !== 'playing') return;
@@ -258,25 +283,39 @@ function endMatch(room, winner) {
 }
 
 // ---------------------------------------------------------------- shots, pickups, bots
-function applyImpulse(tg, g, d) {
-  if (tg.isBot) { tg.bot.ctrl.impulse(g, d); tg.bot.flinchUntil = now() + 700; } // a bot that was just hit aims worse too
-  else send(tg, { t: 'imp', g, d: d.map(r3), by: tg.lastHit.by });
+function applyImpulse(tg, g, d, k, head) {
+  if (tg.isBot) { tg.bot.ctrl.impulse(g, d, k); tg.bot.flinchUntil = now() + 700; } // a bot that was just hit aims worse too
+  else send(tg, { t: 'imp', g, d: d.map(r3), by: tg.lastHit.by, x: k, hs: head });
 }
 
 // pl has ammo and is allowed to fire; tg is the validated target or null
-function resolveShot(room, pl, g, o, e, d, tg) {
+// hs: the shooter's game says it was a headshot (bots do not claim: theirs is worked out from the hit point)
+// charged: a charged SHOVER shot (already checked: enough ammo)
+function resolveShot(room, pl, g, o, e, d, tg, hs, charged) {
   const t = now();
-  pl.ammo[g]--;
+  pl.ammo[g] -= charged ? CHARGE.cost : 1;
   pl.lastFire = pl.lastFire || { L: 0, P: 0 };
   pl.lastFire[g] = t;
   pl.protectUntil = 0; // shooting ends spawn protection
-  let hit = 0;
+  let hit = 0, blocked = 0, head = 0;
   if (tg && tg !== pl && tg.alive && !(room.mode === 'team' && tg.team === pl.team) && t >= (tg.protectUntil || 0)) {
-    hit = tg.id;
-    tg.lastHit = { by: pl.id, time: t, g };
-    applyImpulse(tg, g, d);
+    if (shieldUp(tg) && shieldBlocks(tg.ya, d)) {
+      // the shot met a raised shield: no effect on the target, but the shield loses a charge
+      blocked = tg.id;
+      tg.sh--;
+      if (tg.sh <= 0) { tg.sh = 0; tg.shBroken = true; tg.f &= ~16; }
+      tg.shAt = t;
+      sendShield(tg);
+    } else {
+      hit = tg.id;
+      tg.lastHit = { by: pl.id, time: t, g };
+      // headshot: the hit point is at head height. A player's claim is checked loosely, because they saw the target slightly in the past.
+      const up = e[1] - tg.p[1], need = headFrom(tg.look, (tg.f & 8) !== 0);
+      head = (pl.isBot ? up >= need : hs && up >= need - 0.7) ? 1 : 0;
+      applyImpulse(tg, g, d, Math.min(CHARGE.maxMult, (head ? HEADSHOT_MULT : 1) * (charged ? CHARGE.mult : 1)), head);
+    }
   }
-  broadcast(room, { t: 'shot', id: pl.id, g, o: o.map(r2), e: e.map(r2), h: hit }, pl.isBot ? null : pl);
+  broadcast(room, { t: 'shot', id: pl.id, g, o: o.map(r2), e: e.map(r2), h: hit, b: blocked, hs: head, c: charged ? 1 : 0 }, pl.isBot ? null : pl);
 }
 
 function takePickup(room, pl, pk) {
@@ -289,7 +328,7 @@ function takePickup(room, pl, pk) {
 
 function addBot(room, level) {
   const pl = {
-    id: nextId++, ws: null, isBot: true, botLevel: level, sex: Math.random() < 0.5 ? 'f' : 'm', look: Math.random() < 0.5 ? 'human' : 'egg', name: botName(room), email: null, room: null,
+    id: nextId++, ws: null, isBot: true, botLevel: level, sex: Math.random() < 0.5 ? 'f' : 'm', name: botName(room), email: null, room: null,
     team: null, color: null, alive: false, p: [0, 0, 0], ya: 0, pi: 0, f: 0, kills: 0, deaths: 0,
     ammo: fullAmmo(), bot: makeBrain(level),
   };
@@ -314,7 +353,7 @@ function handle(pl, m) {
     const email = String(m.email || '').trim().slice(0, 100);
     if (!name) return send(pl, { t: 'err', msg: 'Please enter a name.' });
     if (!EMAIL_RE.test(email)) return send(pl, { t: 'err', msg: 'Please enter a valid email.' });
-    pl.name = name; pl.baseName = name; pl.email = email; pl.sex = m.sex === 'f' ? 'f' : 'm'; pl.look = m.look === 'human' ? 'human' : 'egg';
+    pl.name = name; pl.baseName = name; pl.email = email; pl.sex = m.sex === 'f' ? 'f' : 'm'; pl.myLook = m.look === 'human' ? 'human' : 'egg';
     logPlayer(name, email);
     return send(pl, { t: 'hello_ok', name });
   }
@@ -324,7 +363,7 @@ function handle(pl, m) {
   switch (m.t) {
     case 'create': {
       const mode = m.mode === 'team' ? 'team' : 'dm';
-      const r = { code: newCode(), mode, hostId: 0, state: 'lobby', players: new Map(), scores: { A: 0, B: 0 }, pickups: [], endsAt: 0, emptySince: 0 };
+      const r = { code: newCode(), mode, hostId: 0, state: 'lobby', players: new Map(), scores: { A: 0, B: 0 }, pickups: [], endsAt: 0, emptySince: 0, look: pl.myLook || 'egg' }; // everyone in the room gets the creator's character type
       rooms.set(r.code, r);
       joinRoom(pl, r);
       break;
@@ -389,6 +428,7 @@ function handle(pl, m) {
       pl.ya = Number(m.ya) || 0;
       pl.pi = Math.max(-1.6, Math.min(1.6, Number(m.pi) || 0));
       pl.f = m.f | 0;
+      if ((pl.f & 16) && (pl.shBroken || pl.sh < 1)) pl.f &= ~16; // no charge left: the shield is not really up
       pl.lastS = now();
       if (p[1] < KILL_Y) kill(room, pl);
       break;
@@ -402,6 +442,7 @@ function handle(pl, m) {
     case 'fire': {
       if (!room || room.state !== 'playing' || !pl.alive) return;
       const g = m.g === 'P' ? 'P' : 'L';
+      if (g === 'P' && shieldUp(pl)) return; // the shover cannot be fired from behind a raised shield
       const t = now();
       pl.lastFire = pl.lastFire || { L: 0, P: 0 };
       if (t - pl.lastFire[g] < GUNS[g].interval * 1000 * 0.75) return;
@@ -411,7 +452,9 @@ function handle(pl, m) {
       let tg = m.h ? room.players.get(Number(m.h)) : null;
       // the shooter saw the target slightly in the past: accept hits near where the target really is
       if (tg && tg.alive && dist(e, [tg.p[0], tg.p[1] + 0.9, tg.p[2]]) >= 5.5) tg = null;
-      resolveShot(room, pl, g, o, e, d, tg);
+      const charged = g === 'P' && !!m.c && pl.ammo.P >= CHARGE.cost; // without 5 ammo it is just a normal shot
+      resolveShot(room, pl, g, o, e, d, tg, !!m.hs, charged);
+      if (m.c && !charged) send(pl, { t: 'ammo', L: pl.ammo.L, P: pl.ammo.P, D: pl.ammo.D });
       break;
     }
     case 'pick': {
@@ -481,6 +524,13 @@ setInterval(() => {
         if (!p.alive || room.state !== 'playing') continue;
         if (p.prevP && dt > 0) p.v = [0, 1, 2].map((i) => (p.p[i] - p.prevP[i]) / dt);
         p.prevP = p.p.slice();
+        // a lowered shield refills one charge at a time
+        if (shieldUp(p)) p.shAt = t;
+        else if (p.sh < SHIELD.max && t - p.shAt >= SHIELD.regenMs) {
+          p.sh++; p.shAt = t;
+          if (p.sh >= SHIELD.minToRaise) p.shBroken = false;
+          sendShield(p);
+        }
         if (p.isBot) updateBot(room, p, dt, api);
       }
       if (room.state !== 'playing') continue; // a bot knockout can end the match

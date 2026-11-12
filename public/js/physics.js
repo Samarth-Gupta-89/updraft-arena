@@ -48,20 +48,22 @@ export class Controller {
 
   get floating() { return performance.now() < this.floatUntil; }
 
-  impulse(g, d) {
+  // k = strength: 1 for a normal hit, 2 for a headshot (twice the lift height / twice the knockback speed)
+  impulse(g, d, k = 1) {
     const now = performance.now();
     if (g === 'L') {
       // launch speed that rises exactly liftHeight under gravity (v = sqrt(2 g h)), whatever they were doing before
-      this.vy = Math.sqrt(2 * PHYS.gravity * PHYS.liftHeight);
+      this.vy = Math.sqrt(2 * PHYS.gravity * PHYS.liftHeight * k);
       this.floatUntil = now + PHYS.liftFloatMs;
     } else {
       // the hit adds speed along the direction the shot was travelling (all three axes)
       const l = Math.hypot(d[0], d[1], d[2]) || 1;
       const hx = d[0] / l, hy = d[1] / l, hz = d[2] / l;
-      this.kb.x += hx * PHYS.pushV;
-      this.kb.z += hz * PHYS.pushV;
+      this.kb.x += hx * PHYS.pushV * k;
+      this.kb.z += hz * PHYS.pushV * k;
       const m = Math.hypot(this.kb.x, this.kb.z);
-      if (m > PHYS.maxKb) { this.kb.x *= PHYS.maxKb / m; this.kb.z *= PHYS.maxKb / m; }
+      const cap = PHYS.maxKb * k;
+      if (m > cap) { this.kb.x *= cap / m; this.kb.z *= cap / m; }
       this.vy = Math.min(PHYS.maxVy, Math.max(this.vy, 0) + PHYS.pushUp + Math.max(0, hy) * PHYS.pushV * 0.5);
     }
     this.onGround = false;

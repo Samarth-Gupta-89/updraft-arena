@@ -37,7 +37,6 @@ button { font: inherit; color: inherit; }
   border: 1px solid var(--line);
   border-radius: 16px;
   padding: 26px 28px;
-  backdrop-filter: blur(14px);
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
 }
 .panel h2 { font-family: var(--display); font-weight: 600; font-size: 24px; margin: 0 0 16px; }
@@ -128,6 +127,7 @@ kbd.push { color: var(--push); border-color: rgba(255, 176, 46, 0.4); }
 
 /* ------------------------------------------------ HUD */
 #hud { position: fixed; inset: 0; pointer-events: none; font-family: var(--display); user-select: none; }
+#fps { position: absolute; left: 12px; top: 10px; font: 500 12px/1 Inter, sans-serif; color: rgba(255, 255, 255, 0.75); text-shadow: 0 1px 2px #000; }
 #vignette, #water-tint, #fade { position: absolute; inset: 0; opacity: 0; transition: opacity 0.25s; }
 #vignette { background: radial-gradient(ellipse at center, transparent 55%, rgba(95, 243, 255, 0.28) 100%); }
 #vignette.on { opacity: 1; }
@@ -183,6 +183,11 @@ kbd.push { color: var(--push); border-color: rgba(255, 176, 46, 0.4); }
 #status.lift { color: var(--lift); }
 #dash { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); padding: 7px 14px; border-radius: 10px; background: rgba(8, 12, 18, 0.68); border: 1px solid var(--line); font-size: 13px; letter-spacing: 0.08em; color: var(--muted); opacity: 0.45; }
 #dash b { font-size: 18px; color: #fff; margin-right: 4px; }
+#shield { position: absolute; bottom: 72px; left: 50%; transform: translateX(-50%); padding: 7px 14px; border-radius: 10px; background: rgba(8, 12, 18, 0.68); border: 1px solid var(--line); font-size: 13px; letter-spacing: 0.08em; color: #9fdcff; white-space: nowrap; }
+#shield b { font-size: 18px; color: #fff; margin-right: 4px; }
+#shield.up { border-color: rgba(111, 208, 255, 0.9); background: rgba(20, 60, 90, 0.75); }
+#shield.broken { color: #ff8d84; opacity: 0.8; }
+.gun.locked { opacity: 0.35; }
 #dash.on { opacity: 1; color: #b9ff9c; border-color: rgba(125, 255, 106, 0.55); }
 kbd.dash { color: #b9ff9c; }
 #status.info { color: #b7c4d4; }
@@ -238,6 +243,7 @@ tr.me td { background: rgba(95, 243, 255, 0.08); }
 .sex-row { display: flex; align-items: center; gap: 18px; font-size: 13px; color: var(--muted); margin-bottom: 14px; }
 .sex-row label { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--text); font-size: 15px; cursor: pointer; }
 .sex-row input { width: auto; margin: 0; accent-color: var(--lift); }
+.look-note { margin: -6px 0 14px; font-size: 12px; color: var(--muted); }
 .x-btn { margin-left: auto; background: transparent; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); cursor: pointer; padding: 2px 8px; font-size: 13px; }
 .x-btn:hover { color: #fff; border-color: #ff6b5e; background: rgba(255, 94, 82, 0.15); }
 .po-title { font-size: 40px; font-weight: 700; letter-spacing: 0.08em; text-shadow: 0 3px 16px rgba(0, 0, 0, 0.7); }

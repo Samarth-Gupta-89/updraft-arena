@@ -16,6 +16,7 @@ function storeGet(k) { try { return localStorage.getItem(k); } catch { return nu
 
 // 'low' (no anti-aliasing, fewer pixels) when the browser renders 3D on the CPU (no usable graphics chip), else 'high'.
 // Can be forced with ?quality=low or ?quality=high in the URL.
+let gpuName = ''; // which graphics chip the browser is using (shown in the FPS readout)
 function pickQuality() {
   const forced = new URLSearchParams(location.search).get('quality');
   if (forced === 'low' || forced === 'high') return forced;
@@ -24,6 +25,7 @@ function pickQuality() {
     if (!gl) return 'low';
     const ext = gl.getExtension('WEBGL_debug_renderer_info');
     const name = String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+    gpuName = (name.match(/ANGLE \([^,]+, ([^,]+?)(?: \(0x[0-9A-Fa-f]+\))?(?: Direct3D| OpenGL|,|$)/) || [0, name])[1].replace(/\((R|TM)\)/g, '').trim();
     gl.getExtension('WEBGL_lose_context')?.loseContext();
     return /swiftshader|llvmpipe|software|basic render/i.test(name) ? 'low' : 'high';
   } catch { return 'high'; }
@@ -46,7 +48,9 @@ export class Game {
     r.toneMapping = THREE.NoToneMapping; // one less calculation on every pixel
     r.outputColorSpace = THREE.SRGBColorSpace;
     r.autoClear = false;
-    this.perf = { dts: [], time: 0, lastChange: 0, badScale: 9, badUntil: 0 };
+    this.perf = { dts: [], time: 0, lastChange: 0, badScale: 9, badUntil: 0, work: 0 };
+    this.pace = 1; // draw every Nth screen refresh (see autoScale)
+    this.tick = 0;
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(75, 1, 0.05, 1500);
@@ -86,6 +90,9 @@ export class Game {
     this.protectUntil = 0;
     this.fellSent = false;
     this.pickTimes = new Map();
+    this.shield = { v: M.SHIELD.max, broken: false }; // charges left, as last told by the server
+    this.shieldUp = false;
+    this.chargeAt = 0; // when the SHOVER button went down (0 = not held)
     this.protectMap = new Map(); // player id -> spawn protection end time
     this.eyeH = M.PLAYER.eye;
     this.everLocked = false;
@@ -95,7 +102,12 @@ export class Game {
     this.bindNet();
     window.addEventListener('resize', () => this.resize());
     this.resize();
-    r.setAnimationLoop(() => this.frame());
+    // Measure the screen's refresh rate on an empty page first (30 quick ticks, or 0.6 s at most), then start drawing.
+    let n = 0, last = 0, best = Infinity, started = false;
+    const start = () => { if (started) return; started = true; if (best < 0.05) this.perf.hz = 1 / best; r.setAnimationLoop(() => this.frame()); };
+    const probe = (t) => { if (started) return; if (last) best = Math.min(best, (t - last) / 1000); last = t; if (++n < 30) requestAnimationFrame(probe); else start(); };
+    requestAnimationFrame(probe);
+    setTimeout(start, 600);
   }
 
   resize() {
@@ -211,6 +223,7 @@ export class Game {
     n.on('death', (m) => this.onDeath(m));
     n.on('imp', (m) => this.onImpulse(m));
     n.on('shot', (m) => this.onShot(m));
+    n.on('sh', (m) => { this.shield.v = m.v; this.shield.broken = !!m.b; this.hud.setShield(m.v, !!m.b, this.shieldUp); });
     n.on('ammo', (m) => { this.ammo.L = m.L; this.ammo.P = m.P; this.ammo.D = m.D || 0; this.hud.setAmmo(this.ammo); });
     n.on('pk', (m) => {
       this.world.pickups.setActive(m.id, m.a);
@@ -247,6 +260,7 @@ export class Game {
 
   startMatch(m) {
     this.state = 'play';
+    this.renderer.compile(this.scene, this.camera); // build all shaders now, not in the middle of a fight
     this.alive = false;
     this.fellSent = false;
     this.deathAt = 0;
@@ -394,8 +408,9 @@ export class Game {
 
   onImpulse(m) {
     if (!this.alive || this.state !== 'play') return;
-    this.ctrl.impulse(m.g, m.d);
+    this.ctrl.impulse(m.g, m.d, m.x || 1);
     this.sfx.hurt(m.g);
+    if (m.x > 1) this.hud.popup(m.hs ? 'HEADSHOT — DOUBLE HIT!' : 'CHARGED HIT!', '#ff8d84');
     this.shake = Math.min(1, this.shake + (m.g === 'P' ? 0.6 : 0.3));
     // being hit throws your aim off for a moment
     const hard = m.g === 'P' ? 1.4 : 1;
@@ -419,9 +434,10 @@ export class Game {
     if (av) { av.fired(m.g); av.protectUntil = 0; } // shooting ends spawn protection
     this.protectMap.delete(m.id);
     const dir = this.v3.copy(to).sub(from).normalize();
-    this.weapons.tracer(from, to, m.g);
+    this.weapons.tracer(from, to, m.g, !!m.c);
     this.weapons.impact(to, dir, m.g, !!m.h);
     this.sfx.shot(m.g, from);
+    if (m.b === this.myId) { this.sfx.block(); this.hud.popup('BLOCKED', '#9fdcff'); } // my shield took it
   }
 
   onEnd(m) {
@@ -459,7 +475,7 @@ export class Game {
     return { id, point: new THREE.Vector3().copy(d).multiplyScalar(best).add(o) };
   }
 
-  fire(g) {
+  fire(g, charged = false) {
     const now = performance.now();
     if (now < this.nextFire[g]) return;
     if (this.ammo[g] <= 0) {
@@ -467,22 +483,28 @@ export class Game {
       return;
     }
     this.nextFire[g] = now + M.GUNS[g].interval * 1000;
-    this.ammo[g]--;
+    this.ammo[g] -= charged ? M.CHARGE.cost : 1;
     this.hud.setAmmo(this.ammo);
     const o = this.camera.getWorldPosition(this.v1);
     const d = this.camera.getWorldDirection(this.v2);
     const hit = this.raycast(o, d);
     const target = hit.id ? this.avatars.get(hit.id) : null;
-    const effective = target && !target.isProtected; // shielded players shrug hits off
+    // spawn-protected players shrug hits off, and so does a raised shield that the shot meets from the front
+    const effective = target && !target.isProtected && !((target.flags & 16) && M.shieldBlocks(target.yaw, [d.x, d.y, d.z]));
+    // headshot: the shot landed at head height on the target (double lift / double knockback)
+    const head = effective && hit.point.y - target.pos.y >= M.headFrom(target.look, (target.flags & 8) !== 0);
     const muzzle = this.weapons.muzzleWorld(g, this.camera, this.v3);
     this.weapons.kick(g);
-    this.kickP += g === 'P' ? 0.035 : 0.014; // recoil: the view jumps up a little and settles back
-    this.weapons.tracer(muzzle, hit.point, g);
+    this.kickP += (g === 'P' ? 0.035 : 0.014) * (charged ? 2.2 : 1); // recoil: the view jumps up a little and settles back
+    this.weapons.tracer(muzzle, hit.point, g, charged);
     this.weapons.impact(hit.point, d, g, effective);
     this.sfx.shot(g, null);
     if (effective) { this.hud.hitmarker(g); setTimeout(() => this.sfx.hitConfirm(), 40); }
+    if (head) { this.hud.popup('HEADSHOT!', '#ffd84a'); setTimeout(() => this.sfx.hitConfirm(), 150); }
+    else if (charged && effective) this.hud.popup('CHARGED HIT!', '#ffb02e');
+    if (charged) this.shake = Math.min(1, this.shake + 0.35);
     this.protectUntil = 0;
-    this.net.send({ t: 'fire', g, o: arr(o), d: arr(d), e: arr(hit.point), h: hit.id || 0 });
+    this.net.send({ t: 'fire', g, o: arr(o), d: arr(d), e: arr(hit.point), h: hit.id || 0, hs: head ? 1 : 0, c: charged ? 1 : 0 });
   }
 
   // ------------------------------------------------------------------ frame
@@ -491,36 +513,69 @@ export class Game {
   autoScale(rawDt, now) {
     const p = this.perf;
     // a long gap means the tab was hidden/throttled, not that rendering is slow: start counting again
-    if (rawDt > 0.2) { p.dts.length = 0; p.time = 0; return; }
+    if (rawDt > 0.2) { p.dts.length = 0; p.time = 0; p.work = 0; return; }
     p.dts.push(rawDt);
     p.time += rawDt;
     if (p.time < 1.5) return;
-    const d = p.dts.sort((a, b) => a - b);
-    const refresh = d[Math.floor(d.length * 0.05)]; // the fastest frames show the screen's refresh interval
+    const fps = p.dts.length / p.time;
+    // FPS readout (top-left): frames per second, share of full resolution drawn, time spent in the game's own code, graphics chip
+    this.fpsEl = this.fpsEl || document.getElementById('fps');
+    if (this.fpsEl) this.fpsEl.textContent = `${Math.round(fps)} FPS${this.pace > 1 ? ' (steady 1/' + this.pace + ')' : ''} · ${Math.round(this.scale * 100)}% · ${(p.work / p.dts.length).toFixed(1)} ms · ${gpuName}`;
+    p.work = 0;
+    const d = p.dts.sort((x, y) => x - y);
+    const refresh = d[Math.floor(d.length * 0.05)]; // the fastest frames show the interval we are aiming for
     let missed = 0;
     for (const x of d) if (x > refresh * 1.5) missed++;
     missed /= d.length;
     p.dts.length = 0;
     p.time = 0;
-    if (this.state !== 'play' || document.hidden || now - p.lastChange < 3000) return;
+    if (this.pace === 1) p.hz = Math.max(p.hz || 0, 1 / refresh); // the screen's refresh rate: the best we have seen unpaced
+    if (this.state !== 'play' || document.hidden || now - p.lastChange < 2000) return;
+
+    // 1) Did the last resolution drop buy anything? If not, the graphics chip is not waiting on pixels:
+    //    put the sharpness back and stop lowering it.
+    if (p.tryFrom) {
+      if (fps < p.tryFrom.fps * 1.12) { p.noGain = true; this.setScale(p.tryFrom.scale, now); p.tryFrom = null; return; }
+      p.tryFrom = null;
+    }
+    // 2) Resolution: fewer pixels when frames are being missed, more again when there is room.
     let next = this.scale;
-    if (missed > 0.1 && this.scale > 0.5) {
-      next = Math.max(0.5, this.scale - 0.1);
+    if (missed > 0.08 && this.scale > 0.4 && !p.noGain) {
+      next = Math.max(0.4, this.scale - (missed > 0.3 ? 0.2 : 0.1)); // far behind: drop in bigger steps
       p.badScale = this.scale; // don't climb back to a size that just failed for a while (no see-sawing)
       p.badUntil = now + 30000;
+      p.tryFrom = { fps, scale: this.scale };
     } else if (missed < 0.02 && this.scale < this.maxScale) {
       next = Math.min(this.maxScale, this.scale + 0.05);
       if (now < p.badUntil && next >= p.badScale - 0.001) next = this.scale;
     }
-    if (next !== this.scale) {
-      this.scale = Math.round(next * 100) / 100;
+    if (next !== this.scale) { this.setScale(next, now); return; }
+
+    // 3) Frame pacing on fast screens (100 Hz and up). A machine that cannot fill every refresh shows frames at
+    //    uneven moments, which looks jerky. Drawing every 2nd (or 3rd) refresh instead gives evenly spaced
+    //    frames, which looks smoother than a higher but uneven number.
+    const hz = p.hz || 60;
+    if (hz < 100) return;
+    if (this.pace < 3 && missed > 0.08 && fps < (hz / this.pace) * 0.85) {
+      this.pace++;
       p.lastChange = now;
-      this.renderer.setPixelRatio(this.scale);
-      this.resize();
+      p.retryAt = now + (p.retryGap = Math.min(120000, (p.retryGap || 10000) * 2));
+    } else if (this.pace > 1 && missed < 0.02 && now > p.retryAt) {
+      this.pace--; // things look easy: try the faster rate again (waits longer each time it fails)
+      p.lastChange = now;
     }
   }
 
+  setScale(v, now) {
+    this.scale = Math.round(v * 100) / 100;
+    this.perf.lastChange = now;
+    this.renderer.setPixelRatio(this.scale);
+    this.resize();
+  }
+
   frame() {
+    // frame pacing: on a fast screen that this machine cannot keep up with, draw every 2nd or 3rd refresh
+    if (this.pace > 1 && (this.tick = (this.tick + 1) % this.pace) !== 0) return;
     const rawDt = this.clock.getDelta();
     const dt = Math.min(rawDt, 0.05);
     this.t += dt;
@@ -550,6 +605,7 @@ export class Game {
     r.clear();
     r.render(this.scene, this.camera);
     if (this.state === 'play' && this.alive) this.weapons.render(r);
+    this.perf.work += performance.now() - now; // milliseconds this frame spent in the game's own code
   }
 
   updatePlay(dt, now) {
@@ -603,10 +659,22 @@ export class Game {
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld();
 
-    if (active) {
-      if (this.fireHeld.L) this.fire('L');
-      if (this.fireHeld.P) this.fire('P');
+    // shield: held up with F while it has charge. Only the LIFTER can be fired from behind it.
+    const up = active && k.has('KeyF') && !this.shield.broken && this.shield.v >= 1;
+    if (up !== this.shieldUp) { this.shieldUp = up; this.weapons.shieldUp = up; this.hud.setShield(this.shield.v, this.shield.broken, up); }
+    if (active && this.fireHeld.L) this.fire('L');
+    // SHOVER fires when the button is released: a tap is a normal shot; held until charged, it is a charged shot.
+    // Raising the shield or dying cancels it.
+    const holdP = active && this.fireHeld.P && !up;
+    if (holdP && !this.chargeAt) this.chargeAt = now;
+    if (!holdP && this.chargeAt) {
+      const held = now - this.chargeAt;
+      this.chargeAt = 0;
+      if (active && !up) this.fire('P', held >= M.CHARGE.ms && this.ammo.P >= M.CHARGE.cost);
     }
+    const charge = this.chargeAt && this.ammo.P >= M.CHARGE.cost ? Math.min(1, (now - this.chargeAt) / M.CHARGE.ms) : 0;
+    if (charge >= 1 && this.weapons.charge < 1) this.sfx.pickup(); // a ping when it is ready
+    this.weapons.charge = charge;
 
     if (this.alive && now - this.lastSend > 15) { // up to 60 updates per second: fresher positions for everyone else
       this.lastSend = now;
@@ -615,6 +683,7 @@ export class Game {
       if (c.inWater) f |= 2;
       if (c.onGround) f |= 4;
       if (c.crouching) f |= 8;
+      if (this.shieldUp) f |= 16;
       this.net.send({ t: 's', p: [r2(p.x), r2(p.y), r2(p.z)], ya: r3(this.yaw), pi: r3(this.pitch), f });
     }
 
@@ -643,6 +712,8 @@ export class Game {
       if (!M.inArena(p.x, p.z)) this.hud.status('OUT OF THE ARENA!', 'danger');
       else if (now < this.protectUntil) this.hud.status('SPAWN PROTECTION', 'info');
       else if (c.floating) this.hud.status('LIFTED!', 'lift');
+      else if (this.weapons.charge >= 1) this.hud.status('CHARGED — RELEASE!', 'info');
+      else if (this.weapons.charge > 0) this.hud.status('CHARGING…', 'info');
       else this.hud.status('');
     }
   }

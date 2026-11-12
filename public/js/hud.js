@@ -18,6 +18,8 @@ export class Hud {
     this.barEl = { L: $('#bar-L'), P: $('#bar-P') };
     this.gunEl = { L: $('.gun-L'), P: $('.gun-P') };
     this.dashEl = $('#dash');
+    this.shieldEl = $('#shield');
+    this.shieldN = $('#shield-n');
     this.dashN = $('#dash-n');
     this.feed = $('#killfeed');
     this.centerEl = $('#center-msg');
@@ -140,6 +142,13 @@ export class Hud {
     setTimeout(() => d.remove(), 1100);
   }
 
+  // charges left; broken = recharging and cannot be raised yet; up = held in front right now
+  setShield(v, broken, up) {
+    this.shieldN.textContent = v;
+    this.shieldEl.classList.toggle('broken', broken);
+    this.shieldEl.classList.toggle('up', up);
+    this.gunEl.P.classList.toggle('locked', up);
+  }
   setLifted(v) { if (v !== this.lifted) { this.lifted = v; this.vignette.classList.toggle('on', v); } }
   setWater(v) { if (v !== this.water) { this.water = v; this.waterEl.classList.toggle('on', v); } }
   setFade(v) { if (v !== this.fade) { this.fade = v; this.fadeEl.style.opacity = v; } }

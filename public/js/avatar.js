@@ -4,9 +4,11 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import * as TX from './textures.js';
+import { shieldGeometry, shieldMaterial } from './weapons.js';
 
 const INTERP_DELAY = 100; // ms behind the newest snapshot
 const ARM_Y = 1.25;
+const HUMAN_SCALE = 1.95; // humans are modelled life size, then drawn this much bigger
 
 // non-indexed, position/normal/uv only, so any mix of primitives can be merged
 function prep(g, m) {
@@ -16,15 +18,47 @@ function prep(g, m) {
   return out;
 }
 const at = (x, y, z, sx = 1, sy = 1, sz = 1) => new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion(), new THREE.Vector3(sx, sy, sz));
-const ball = (r, x, y, z, sx = 1, sy = 1, sz = 1) => prep(new THREE.SphereGeometry(r, 14, 10), at(x, y, z, sx, sy, sz));
+const ball = (r, x, y, z, sx = 1, sy = 1, sz = 1) => prep(new THREE.SphereGeometry(r, 10, 7), at(x, y, z, sx, sy, sz));
 
 // capsule from point a to point b
 function limb(r, a, b) {
   const dir = new THREE.Vector3().subVectors(b, a);
   const len = dir.length();
-  const g = new THREE.CapsuleGeometry(r, Math.max(0.01, len - r * 2), 4, 8);
+  const g = new THREE.CapsuleGeometry(r, Math.max(0.01, len - r * 2), 2, 6);
   const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
   return prep(g, new THREE.Matrix4().compose(new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5), q, new THREE.Vector3(1, 1, 1)));
+}
+
+// Several parts merged into ONE mesh. Each part is [geometry, colour]; colour null = "the player's colour".
+// The colours live on the vertices, so a whole body is a single draw call.
+function bakeParts(parts) {
+  const g = mergeGeometries(parts.map((p) => p[0]));
+  const n = g.attributes.position.count, tint = new Float32Array(n * 3), mask = new Uint8Array(n), c = new THREE.Color();
+  let off = 0;
+  for (const [pg, hex] of parts) {
+    const cnt = pg.attributes.position.count;
+    if (hex === null) mask.fill(1, off, off + cnt);
+    else { c.set(hex); for (let i = off; i < off + cnt; i++) { tint[i * 3] = c.r; tint[i * 3 + 1] = c.g; tint[i * 3 + 2] = c.b; } }
+    off += cnt;
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(tint, 3));
+  g.userData.mask = mask;
+  return g;
+}
+// a copy that shares the shape with the template but has its own colours
+function tinted(tpl) {
+  const g = new THREE.BufferGeometry();
+  for (const k of ['position', 'normal', 'uv']) g.setAttribute(k, tpl.attributes[k]);
+  g.setAttribute('color', new THREE.BufferAttribute(tpl.attributes.color.array.slice(), 3));
+  g.userData.mask = tpl.userData.mask;
+  return g;
+}
+const paintC = new THREE.Color();
+function paint(g, hex) {
+  paintC.set(hex);
+  const a = g.attributes.color.array, m = g.userData.mask;
+  for (let i = 0; i < m.length; i++) if (m[i]) { a[i * 3] = paintC.r; a[i * 3 + 1] = paintC.g; a[i * 3 + 2] = paintC.b; }
+  g.attributes.color.needsUpdate = true;
 }
 
 const shared = {};
@@ -33,7 +67,7 @@ function sharedAssets() {
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
   // ---- egg body: about 2.2 m wide, 2.2 m tall, fat at the bottom and narrower on top. Faces -Z.
-  const egg = new THREE.SphereGeometry(1, 24, 18);
+  const egg = new THREE.SphereGeometry(1, 20, 14);
   const p = egg.attributes.position;
   for (let i = 0; i < p.count; i++) {
     const y = p.getY(i);
@@ -54,7 +88,7 @@ function sharedAssets() {
     ball(0.24, -0.26, 2.42, 0, 1, 0.8, 0.5), ball(0.24, 0.26, 2.42, 0, 1, 0.8, 0.5), ball(0.11, 0, 2.42, 0),
   ]);
   // male: little dark helmet with a spike (merged with belt)
-  const belt = prep(new THREE.TorusGeometry(1.09, 0.06, 6, 28), new THREE.Matrix4().makeRotationX(Math.PI / 2).setPosition(0, 0.95, 0));
+  const belt = prep(new THREE.TorusGeometry(1.09, 0.06, 5, 22), new THREE.Matrix4().makeRotationX(Math.PI / 2).setPosition(0, 0.95, 0));
   shared.gearGm = mergeGeometries([
     belt,
     prep(new THREE.SphereGeometry(0.5, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.45), at(0, 2.02, 0, 1.15, 0.9, 1.1)),
@@ -106,9 +140,28 @@ function sharedAssets() {
   shared.gold = new THREE.MeshLambertMaterial({ color: 0xdcb44c });
   shared.red = new THREE.MeshLambertMaterial({ color: 0xc81e2c });
 
-  shared.ringG = new THREE.TorusGeometry(1.2, 0.07, 6, 28);
+  shared.ringG = new THREE.TorusGeometry(1.2, 0.07, 5, 22);
   shared.ringG.rotateX(Math.PI / 2);
-  shared.shieldG = new THREE.SphereGeometry(1.75, 20, 12);
+  shared.shieldG = new THREE.SphereGeometry(1.75, 16, 10);
+  // hand-held shield (F): a round, solid blue shield held in the right hand, in front of the gun
+  shared.guardG = shieldGeometry();
+  shared.guardMat = shieldMaterial();
+
+  // ---- one-mesh templates (body, arms, guns)
+  const SKIN = 0xc48a5a, HAIR = 0x1a1410, CLOTH = 0xf4efe4, GOLD = 0xdcb44c, GEAR = 0x2a2e34;
+  shared.eggBodyM = bakeParts([[shared.eggG, null], [shared.whiteG, 0xffffff], [shared.blackG, 0x15171a], [shared.pinkG, 0xff8fb3], [shared.gearGm, GEAR]]);
+  shared.eggBodyF = bakeParts([[shared.eggG, null], [shared.whiteG, 0xffffff], [shared.blackGf, 0x15171a], [shared.bowG, 0xff8fb3], [shared.gearGf, GEAR]]);
+  shared.humanM = bakeParts([[shared.hKurtaG, null], [shared.hSashG, CLOTH], [shared.hSkinGm, SKIN], [shared.hHairGm, HAIR]]);
+  shared.humanF = bakeParts([[shared.hSareeG, null], [shared.hBlouseG, GOLD], [shared.hSkinGf, SKIN], [shared.hHairGf, HAIR], [shared.hBindiG, 0xc81e2c]]);
+  // arms and both guns are one mesh: the guns are placed in the hands here
+  const guns = (x, y, z, s) => {
+    const put = (g, side) => g.clone().applyMatrix4(at(side * x, y, z, s, s, s));
+    return [[put(shared.gunG, -1), 0x2a2d31], [put(shared.barrelG, -1), 0x5ff3ff], [put(shared.gunG, 1), 0x2a2d31], [put(shared.barrelG, 1), 0xffb02e]];
+  };
+  shared.eggArms = bakeParts([[shared.armG, null], ...guns(0.8, -0.05, -0.9, 1)]);
+  shared.hArmsM = bakeParts([[shared.hSleeveG, null], [shared.hHandG, SKIN], ...guns(0.2, -0.1, -0.5, 0.55)]);
+  shared.hArmsF = bakeParts([[shared.hArmsGf, SKIN], ...guns(0.2, -0.1, -0.5, 0.55)]); // a saree leaves the arms bare
+  shared.vcol = new THREE.MeshLambertMaterial({ vertexColors: true });
 
   shared.white = new THREE.MeshLambertMaterial({ color: 0xffffff });
   shared.black = new THREE.MeshLambertMaterial({ color: 0x15171a });
@@ -139,37 +192,20 @@ export class Avatar {
     this.protectUntil = 0;
     this.crouchAmt = 0;
 
-    this.bodyMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
     const g = (this.group = new THREE.Group());
     const female = info.sex === 'f';
     this.look = info.look === 'human' ? 'human' : 'egg';
     // sizes that differ between the two looks
     const human = this.look === 'human';
     const dim = (this.dim = human
-      ? { armY: 1.38, gunX: 0.2, gunY: -0.1, gunZ: -0.5, gunS: 0.55, tagY: 2.1, tagDrop: 0.5, sqY: 0.3, sqXZ: 0, swing: 0.7, rock: 0.04, bounce: 0.03, ring: 0.45, shield: 0.62, shieldY: 0.9, hip: 0.9, footX: 0.1 }
-      : { armY: ARM_Y, gunX: 0.8, gunY: -0.05, gunZ: -0.9, gunS: 1, tagY: 3.05, tagDrop: 0.85, sqY: 0.36, sqXZ: 0.12, swing: 0.9, rock: 0.13, bounce: 0.07, ring: 1, shield: 1, shieldY: 1.3, hip: 0.4, footX: 0.42 });
+      ? { armY: 1.38, gunX: 0.2, gunY: -0.1, gunZ: -0.5, gunS: 0.55, tagY: 2.1, tagDrop: 0.5, sqY: 0.3, sqXZ: 0, swing: 0.7, rock: 0.04, bounce: 0.03, ring: 0.45, shield: 0.62, shieldY: 0.9, guardR: 0.84, hip: 0.9, footX: 0.1 }
+      : { armY: ARM_Y, gunX: 0.8, gunY: -0.05, gunZ: -0.9, gunS: 1, tagY: 3.05, tagDrop: 0.85, sqY: 0.36, sqXZ: 0.12, swing: 0.9, rock: 0.13, bounce: 0.07, ring: 1, shield: 1, shieldY: 1.3, guardR: 1.6, hip: 0.4, footX: 0.42 });
 
     // the egg squashes down when crouching and wobbles when walking (pivot at the ground)
     const egg = (this.egg = new THREE.Group());
-    if (!human) {
-      egg.add(
-        new THREE.Mesh(S.eggG, this.bodyMat),
-        new THREE.Mesh(S.whiteG, S.white),
-        new THREE.Mesh(female ? S.blackGf : S.blackG, S.black),
-        new THREE.Mesh(female ? S.bowG : S.pinkG, S.pink),
-        new THREE.Mesh(female ? S.gearGf : S.gearGm, S.gear),
-      );
-    } else if (female) {
-      egg.add(
-        new THREE.Mesh(S.hSareeG, this.bodyMat), new THREE.Mesh(S.hBlouseG, S.gold), new THREE.Mesh(S.hSkinGf, S.skin),
-        new THREE.Mesh(S.hHairGf, S.hair), new THREE.Mesh(S.hBindiG, S.red),
-      );
-    } else {
-      egg.add(
-        new THREE.Mesh(S.hKurtaG, this.bodyMat), new THREE.Mesh(S.hSashG, S.cloth),
-        new THREE.Mesh(S.hSkinGm, S.skin), new THREE.Mesh(S.hHairGm, S.hair),
-      );
-    }
+    // the whole body is one mesh; the parts in the player's colour are painted in setInfo
+    this.bodyG = tinted(human ? (female ? S.humanF : S.humanM) : (female ? S.eggBodyF : S.eggBodyM));
+    egg.add(new THREE.Mesh(this.bodyG, S.vcol));
     g.add(egg);
 
     // legs / feet swing from the hip. A saree hides the legs, so the woman gets none.
@@ -183,19 +219,18 @@ export class Avatar {
     // arms + guns follow the view pitch
     this.arms = new THREE.Group();
     this.arms.position.y = dim.armY;
-    if (!human) this.arms.add(new THREE.Mesh(S.armG, this.bodyMat));
-    else if (female) this.arms.add(new THREE.Mesh(S.hArmsGf, S.skin)); // bare arms
-    else this.arms.add(new THREE.Mesh(S.hSleeveG, this.bodyMat), new THREE.Mesh(S.hHandG, S.skin)); // kurta sleeves
-    const mkGun = (side, glow) => {
+    this.armsG = human && female ? null : tinted(human ? S.hArmsM : S.eggArms); // sleeves take the player's colour
+    this.arms.add(new THREE.Mesh(this.armsG || S.hArmsF, S.vcol));
+    // empty markers at the hands: they only say where tracers start (the guns are part of the arms mesh)
+    const mkGun = (side) => {
       const gun = new THREE.Group();
       gun.position.set(side * dim.gunX, dim.gunY, dim.gunZ);
       gun.scale.setScalar(dim.gunS);
-      gun.add(new THREE.Mesh(S.gunG, S.gunMetal), new THREE.Mesh(S.barrelG, glow));
       this.arms.add(gun);
       return gun;
     };
-    this.gunL = mkGun(-1, S.liftGlow);
-    this.gunR = mkGun(1, S.pushGlow);
+    this.gunL = mkGun(-1);
+    this.gunR = mkGun(1);
     egg.add(this.arms);
 
     this.floatRing = new THREE.Mesh(S.ringG, S.floatRingMat);
@@ -208,8 +243,15 @@ export class Avatar {
     this.shield.visible = false;
     g.add(this.shield);
 
+    this.guard = new THREE.Mesh(S.guardG, S.guardMat);
+    this.guard.position.set(dim.gunX * 0.9, dim.gunY + dim.guardR * 0.1, dim.gunZ - 0.45 * dim.gunS);
+    this.guard.scale.setScalar(dim.guardR);
+    this.guard.visible = false;
+    this.arms.add(this.guard); // moves with the arms, so it points where the player aims
+
     this.tag = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthWrite: false }));
     this.tag.scale.set(2.0, 0.5, 1);
+    if (human) { g.scale.setScalar(HUMAN_SCALE); this.tag.scale.set(2.0 / HUMAN_SCALE, 0.5 / HUMAN_SCALE, 1); }
     this.tag.position.y = dim.tagY;
     g.add(this.tag);
 
@@ -223,7 +265,8 @@ export class Avatar {
     if (key === this.infoKey) return;
     this.infoKey = key;
     this.name = info.name;
-    this.bodyMat.color.set(info.colorHex);
+    paint(this.bodyG, info.colorHex);
+    if (this.armsG) paint(this.armsG, info.colorHex);
     if (this.tag.material.map) this.tag.material.map.dispose();
     this.tag.material.map = TX.nameTag(info.name, info.colorHex);
     this.tag.material.depthTest = isEnemy; // teammates' names show through walls
@@ -321,6 +364,7 @@ export class Avatar {
     }
 
     this.shield.visible = now < this.protectUntil;
+    this.guard.visible = (this.flags & 16) !== 0;
 
     const lifted = (this.flags & 1) !== 0;
     this.floatRing.visible = lifted;
@@ -334,7 +378,8 @@ export class Avatar {
 
   dispose() {
     this.scene.remove(this.group);
-    this.bodyMat.dispose();
+    this.bodyG.dispose();
+    if (this.armsG) this.armsG.dispose();
     if (this.tag.material.map) this.tag.material.map.dispose();
     this.tag.material.dispose();
   }

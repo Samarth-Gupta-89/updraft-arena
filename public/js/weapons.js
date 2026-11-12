@@ -60,6 +60,22 @@ function buildShover(M) {
   return mergeByMaterial(g);
 }
 
+// A round, solid, domed shield: blue rings around a pale centre boss. It faces -Z and its rim has radius 1.
+export function shieldGeometry() {
+  const END = 0.56; // how far round the ball the dome reaches (radians from its tip)
+  const bands = [[0, 0.16, 0xdfeeff], [0.16, 0.3, 0x1f5fd0], [0.3, 0.44, 0x7fc4ff], [0.44, END, 0x123a8c]];
+  const geos = bands.map(([a, b, hex]) => {
+    const g = new THREE.SphereGeometry(1, 28, 2, 0, Math.PI * 2, a, b - a).toNonIndexed();
+    const c = new THREE.Color(hex), n = g.attributes.position.count, col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; }
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    return g;
+  });
+  const k = 1 / Math.sin(END);
+  return mergeGeometries(geos).translate(0, -Math.cos(END), 0).rotateX(-Math.PI / 2).scale(k, k, k);
+}
+export const shieldMaterial = () => new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+
 export class Weapons {
   constructor(worldScene) {
     this.world = worldScene;
@@ -82,6 +98,26 @@ export class Weapons {
       this.guns[k].position.copy(this.base[k]);
       this.vScene.add(this.guns[k]);
     }
+    // the shield takes the right gun's place while F is held
+    this.shield = new THREE.Mesh(shieldGeometry(), shieldMaterial());
+    this.shield.scale.setScalar(0.21);
+    this.shield.rotation.set(0.12, 0.3, 0);
+    // the right hand and forearm holding it from behind (sizes are in shield units: its rim radius is 1)
+    const skin = new THREE.MeshLambertMaterial({ color: 0xc48a5a });
+    const fist = new THREE.Mesh(new THREE.SphereGeometry(0.2, 10, 8), skin);
+    fist.position.set(0, 0, 0.16);
+    const elbow = new THREE.Vector3(0.75, -0.95, 1.5), wrist = new THREE.Vector3(0, 0, 0.2);
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.15, elbow.distanceTo(wrist), 2, 8), skin);
+    arm.position.copy(elbow).add(wrist).multiplyScalar(0.5);
+    arm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), elbow.clone().sub(wrist).normalize());
+    const strap = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.12, 0.05), mats.dark);
+    strap.position.set(0, 0, 0.08);
+    this.shield.add(fist, arm, strap);
+    this.shield.visible = false;
+    this.vScene.add(this.shield);
+    this.shieldUp = false; // set by the game
+    this.shieldT = 0;      // 0 = down, 1 = fully raised
+    this.charge = 0;       // 0..1, how charged the SHOVER is (set by the game)
     this.kickAmt = { L: 0, P: 0 };
     this.bobT = 0;
     this.visible = true;
@@ -222,6 +258,20 @@ export class Weapons {
       f.t -= dt;
       f.sp.visible = f.t > 0;
       if (f.sp.visible) f.sp.scale.setScalar((k === 'P' ? 0.22 : 0.13) * (0.8 + Math.random() * 0.4));
+    }
+
+    // swap the right gun for the shield (it swings up from below)
+    this.shieldT += ((this.shieldUp ? 1 : 0) - this.shieldT) * Math.min(1, dt * 16);
+    this.guns.P.visible = this.shieldT < 0.5;
+    this.shield.visible = this.shieldT > 0.03;
+    this.shield.position.set(0.25 + bx, -0.2 - by - (1 - this.shieldT) * 0.45, -0.44);
+    // charging the SHOVER: its muzzle glows brighter and the gun trembles
+    if (this.charge > 0) {
+      const f = this.flash.P, gun = this.guns.P;
+      f.sp.visible = true;
+      f.sp.scale.setScalar(0.08 + 0.3 * this.charge * (0.9 + Math.random() * 0.2));
+      gun.position.x += (Math.random() - 0.5) * 0.006 * this.charge;
+      gun.position.y += (Math.random() - 0.5) * 0.006 * this.charge;
     }
 
     for (const t of this.tracers) {

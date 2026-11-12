@@ -2,6 +2,7 @@
 // Static objects are merged into a handful of meshes so the GPU gets few draw calls.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { MarchingCubes } from 'three/addons/objects/MarchingCubes.js';
 import * as M from './shared/map.js';
 import * as TX from './textures.js';
 
@@ -52,11 +53,11 @@ export function buildWorld(renderer, scene) {
   // ---------------------------------------------------------------- terrain (a grid stretched over the four-sided yard)
   {
     const [A, B, Cc, D] = ARENA.poly;
-    const NU = 132, NV = 92;
+    const NU = 84, NV = 58; // ~1.5 m squares: plenty for a flat yard and the pond banks
     const posArr = new Float32Array((NU + 1) * (NV + 1) * 3), uvArr = new Float32Array((NU + 1) * (NV + 1) * 2);
     const colors = new Float32Array((NU + 1) * (NV + 1) * 3);
     const C = {
-      paveA: new THREE.Color(0xa6977a), paveB: new THREE.Color(0xbcab86), grass: new THREE.Color(0x58762f),
+      paveA: new THREE.Color(0xa29c90), paveB: new THREE.Color(0xb3ac9c), grass: new THREE.Color(0x58762f),
       dirt: new THREE.Color(0x7d6646), sand: new THREE.Color(0xa38f66), mud: new THREE.Color(0x4c4433), gravel: new THREE.Color(0x7f7970),
     };
     const col = new THREE.Color();
@@ -69,16 +70,10 @@ export function buildWorld(renderer, scene) {
         const y = M.groundAt(x, z);
         posArr[i * 3] = x; posArr[i * 3 + 1] = y; posArr[i * 3 + 2] = z;
         uvArr[i * 2] = x / 104; uvArr[i * 2 + 1] = z / 80;
-        // sandy paved yard with a few green patches
+        // pale granite paving, like the temple yard
         col.copy(C.paveA).lerp(C.paveB, M.fbm(x * 0.05 + 100, z * 0.05, 4, 21));
-        const n2 = M.fbm(x * 0.07, z * 0.07 + 50, 3, 22);
-        if (n2 > 0.64) col.lerp(C.grass, Math.min(1, (n2 - 0.64) * 5));
-        const n3 = M.fbm(x * 0.15, z * 0.15, 3, 23);
-        if (n3 > 0.66) col.lerp(C.dirt, Math.min(1, (n3 - 0.66) * 4));
         if (y < WATER_LEVEL + 0.45) col.lerp(C.sand, smooth((WATER_LEVEL + 0.45 - y) / 0.5));
         if (y < WATER_LEVEL - 0.2) col.lerp(C.mud, smooth((WATER_LEVEL - 0.2 - y) / 0.8));
-        const edge = M.edgeDist(x, z);
-        if (edge < 1.6) col.lerp(C.gravel, 1 - edge / 1.6);
         colors[i * 3] = col.r; colors[i * 3 + 1] = col.g; colors[i * 3 + 2] = col.b;
       }
     }
@@ -95,25 +90,37 @@ export function buildWorld(renderer, scene) {
     g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     g.setIndex(idx);
     g.computeVertexNormals();
-    const mat = new THREE.MeshLambertMaterial({ vertexColors: true, map: TX.terrainDetail() });
-    mat.color.setScalar(1.45);
-    scene.add(new THREE.Mesh(g, mat));
+    // the yard is flat, so its lighting is the same everywhere: a plain (unlit) material looks the same and costs less per pixel
+    const mat = new THREE.MeshBasicMaterial({ vertexColors: true, map: TX.paving() });
+    mat.color.setScalar(0.86);
+    const ground = new THREE.Mesh(g, mat);
+    ground.renderOrder = 2; // after the walls and cover: the pixels they hide are skipped
+    scene.add(ground);
   }
 
   // ---------------------------------------------------------------- ponds (one sheet of water under both, the ground hides the rest)
   {
-    const wn = TX.waterNormal();
-    const mat = new THREE.MeshPhongMaterial({
-      color: 0x24606c, specular: 0xbfd8e6, shininess: 90, normalMap: wn, normalScale: new THREE.Vector2(0.5, 0.5),
-      transparent: true, opacity: 0.82,
-    });
+    // plain still water: ripples and highlights were worked out for every pixel of the ponds
+    const mat = new THREE.MeshBasicMaterial({ color: 0x3a6a4c, transparent: true, opacity: 0.84 });
     let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
     for (const k of M.PONDS) { x0 = Math.min(x0, k.x - k.rx); x1 = Math.max(x1, k.x + k.rx); z0 = Math.min(z0, k.z - k.rz); z1 = Math.max(z1, k.z + k.rz); }
     const water = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0 + 4, z1 - z0 + 4), mat);
     water.rotation.x = -Math.PI / 2;
     water.position.set((x0 + x1) / 2, WATER_LEVEL, (z0 + z1) / 2);
     scene.add(water);
-    updaters.push((t) => wn.offset.set(t * 0.011, t * 0.019));
+    // lotus leaves and flowers floating on the two ponds
+    const pads = [], blooms = [];
+    for (let k = 0; k < 56; k++) {
+      const pond = M.PONDS[k % 2];
+      const a = M.noise2(k * 1.7, 3, 5) * Math.PI * 4, rr = Math.sqrt(M.noise2(k * 2.3, 9, 6)) * 0.8;
+      const x = pond.x + Math.cos(a) * pond.rx * rr, z = pond.z + Math.sin(a) * pond.rz * rr;
+      if (M.groundAt(x, z) > WATER_LEVEL - 0.5) continue;
+      const r = 0.3 + M.noise2(k, 1, 7) * 0.35;
+      pads.push(new THREE.CircleGeometry(r, 9, 0.4, Math.PI * 2 - 0.5).rotateX(-Math.PI / 2).rotateY(k).translate(x, WATER_LEVEL + 0.03, z));
+      if (k % 3 === 0) blooms.push(new THREE.ConeGeometry(0.16, 0.26, 6).rotateX(Math.PI).translate(x + r * 0.4, WATER_LEVEL + 0.17, z));
+    }
+    scene.add(merged(pads, new THREE.MeshLambertMaterial({ color: 0x3f8a3a })));
+    scene.add(merged(blooms, new THREE.MeshLambertMaterial({ color: 0xf08ab4 })));
   }
 
   // ---------------------------------------------------------------- arched stone bridge over the channel
@@ -132,11 +139,13 @@ export function buildWorld(renderer, scene) {
     for (let k = 24; k >= 0; k--) { const dx = -L + (2 * L * k) / 24; rail.lineTo(dx, M.bridgeArch(dx) + 0.45); }
     rail.closePath();
     const rails = [-1, 1].map((s) => new THREE.ExtrudeGeometry(rail, { depth: 0.22, bevelEnabled: false }).translate(bx, 0, bz + s * (W + 0.11) - 0.11));
-    scene.add(merged([deck, ...rails], new THREE.MeshLambertMaterial({ color: 0xe6dcc6 })));
+    scene.add(merged([deck, ...rails], new THREE.MeshLambertMaterial({ color: 0xf2ece0 })));
   }
 
-  // ---------------------------------------------------------------- boundary wall along the outline, hazard caps, slab
+  // ---------------------------------------------------------------- white compound wall along the outline, terracotta top, slab
   const concTex = TX.concrete();
+  const plasterTex = TX.plaster();
+  const tileTex = TX.roofTiles();
   {
     const T = ARENA.wallT, top = ARENA.wallH, bottom = -3;
     const walls = [], caps = [];
@@ -144,10 +153,10 @@ export function buildWorld(renderer, scene) {
       const ang = Math.atan2(-e.tz, e.tx);
       const mx = (e.ax + e.bx) / 2 - e.nx * T / 2, mz = (e.az + e.bz) / 2 - e.nz * T / 2;
       walls.push(tiledBox(e.len + T * 2.4, top - bottom, T, 4).rotateY(ang).translate(mx, (top + bottom) / 2, mz));
-      caps.push(tiledBox(e.len + T * 2.4, 0.32, T + 0.04, 1.6).rotateY(ang).translate(mx, top - 0.15, mz));
+      caps.push(tiledBox(e.len + T * 2.4, 0.4, T + 0.3, 1.6).rotateY(ang).translate(mx, top - 0.1, mz));
     }
-    scene.add(merged(walls, new THREE.MeshLambertMaterial({ map: concTex, color: 0xe2ded6 })));
-    scene.add(merged(caps, new THREE.MeshLambertMaterial({ map: TX.hazard() })));
+    scene.add(merged(walls, new THREE.MeshLambertMaterial({ map: plasterTex, color: 0xfff6e6 })));
+    scene.add(merged(caps, new THREE.MeshLambertMaterial({ map: tileTex })));
     // the slab the arena sits on (seen when falling out)
     const shape = new THREE.Shape();
     ARENA.poly.forEach(([x, z], k) => { const px = x * 1.03, pz = z * 1.03; if (k) shape.lineTo(px, pz); else shape.moveTo(px, pz); });
@@ -191,17 +200,12 @@ export function buildWorld(renderer, scene) {
       } else if (ref.type === 'nandi') {
         const n = nandiGeometry();
         const nx = M.NANDI.x, nz = M.NANDI.z;
-        scene.add(new THREE.Mesh(n.body.translate(nx, c.base, nz), new THREE.MeshPhongMaterial({ color: 0x1d1d21, specular: 0x55504a, shininess: 28 })));
-        scene.add(new THREE.Mesh(n.gold.translate(nx, c.base, nz), new THREE.MeshLambertMaterial({ color: 0xc9a13c })));
+        scene.add(new THREE.Mesh(n.body.translate(nx, c.base, nz), new THREE.MeshPhongMaterial({ color: 0x2b2e2d, specular: 0x5a554e, shininess: 22 })));
+        scene.add(new THREE.Mesh(n.gold.translate(nx, c.base, nz), new THREE.MeshPhongMaterial({ color: 0xa87f3c, specular: 0xd8b060, shininess: 40 })));
       } else if (ref.type === 'rock') {
         rocks.push(rockGeometry(ref.w, ref.h, ref.d, rockSeed++).translate(x, c.base, z));
       } else if (ref.type === 'tree') {
-        // coconut palm: thin trunk, drooping fronds at the top
-        trunks.push(new THREE.CylinderGeometry(0.16, 0.28, 8, 7).translate(x, c.base + 4, z));
-        for (let i = 0; i < 8; i++) {
-          const frond = new THREE.ConeGeometry(0.55, 3.6, 4).scale(1, 1, 0.22).rotateZ(-(Math.PI / 2 + 0.3 + (i % 2) * 0.25)).translate(1.6, -0.45 - (i % 2) * 0.35, 0);
-          leaves.push(frond.rotateY((i / 8) * Math.PI * 2 + x).translate(x, c.base + 8.1, z));
-        }
+        palm(trunks, leaves, x, z, c.base, c.base + 8);
       }
     }
     const barTex = concTex.clone();
@@ -212,13 +216,16 @@ export function buildWorld(renderer, scene) {
     scene.add(merged(posts, new THREE.MeshLambertMaterial({ color: 0x2a2a2a })));
     scene.add(merged(barriers, new THREE.MeshLambertMaterial({ map: barTex, color: 0xe8e4dc })));
     scene.add(merged(rocks, new THREE.MeshLambertMaterial({ map: TX.rock(), color: 0xcfc6b8 })));
-    const blockMat = new THREE.MeshLambertMaterial({ map: concTex, color: 0xe6d3ab });
-    blockMat.color.multiplyScalar(1.5); // pale sandstone: brighter than the texture alone
-    scene.add(merged(blocks, blockMat));
+    scene.add(merged(blocks, new THREE.MeshLambertMaterial({ map: plasterTex, color: 0xfff1dc }))); // white-washed walls
     scene.add(merged(stones, new THREE.MeshLambertMaterial({ map: concTex, color: 0x9a968e })));
     scene.add(merged(trunks, new THREE.MeshLambertMaterial({ map: TX.bark() })));
     scene.add(merged(leaves, new THREE.MeshLambertMaterial({ color: 0x4a7a30, flatShading: true, side: THREE.DoubleSide })));
   }
+
+  buildSurroundings(scene, plasterTex, tileTex);
+
+  // nothing built above ever moves, so three.js need not recompute its placement every frame
+  for (const o of scene.children) if (o.isMesh || o.isInstancedMesh) { o.updateMatrix(); o.matrixAutoUpdate = false; }
 
   const pickups = new PickupVisuals(scene);
 
@@ -257,28 +264,111 @@ function buildSky(sunDir) {
   return grp;
 }
 
-// The Nandi: a big black reclining bull facing -x, built from stretched spheres. Origin = middle of its base.
+// coconut palm: thin trunk from baseY up to topY, drooping fronds at the top
+function palm(trunks, leaves, x, z, baseY, topY) {
+  const h = topY - baseY;
+  trunks.push(new THREE.CylinderGeometry(0.16, 0.28, h, 7).translate(x, baseY + h / 2, z));
+  for (let i = 0; i < 8; i++) {
+    const frond = new THREE.ConeGeometry(0.55, 3.6, 4).scale(1, 1, 0.22).rotateZ(-(Math.PI / 2 + 0.3 + (i % 2) * 0.25)).translate(1.6, -0.45 - (i % 2) * 0.35, 0);
+    leaves.push(frond.rotateY((i / 8) * Math.PI * 2 + x).translate(x, topY + 0.1, z));
+  }
+}
+
+// What you see over the wall, as at the Isha Yoga Center: the brick dome of the Dhyanalinga to the west,
+// tile-roofed buildings, coconut groves all round and the Velliangiri hills behind. Scenery only (no collisions);
+// it stands a few metres clear of the wall, so anyone pushed out still falls past it.
+function buildSurroundings(scene, plasterTex, tileTex) {
+  const DEEP = -40; // how far down the bases go
+  const out = (edge, t, dist) => { const e = M.EDGES[edge]; return [e.ax + e.tx * e.len * t - e.nx * dist, e.az + e.tz * e.len * t - e.nz * dist, Math.atan2(-e.tz, e.tx)]; };
+  const wallsG = [], roofsG = [], domeG = [], trunks = [], leaves = [], solid = [];
+  const building = (x, z, ang, w, d, wallH, roofH) => {
+    wallsG.push(tiledBox(w, wallH - DEEP, d, 3).rotateY(ang).translate(x, (wallH + DEEP) / 2, z));
+    const k = 0.7071;
+    roofsG.push(new THREE.ConeGeometry(1, roofH, 4, 1).rotateY(Math.PI / 4).scale((w / 2 + 1) / k, 1, (d / 2 + 1) / k).rotateY(ang).translate(x, wallH + roofH / 2, z));
+    solid.push([x, z, Math.max(w, d) / 2 + 2]);
+  };
+  // the Dhyanalinga dome, beyond the west wall (the Nandi faces it)
+  const [dx, dz] = out(3, 0.52, 30);
+  domeG.push(new THREE.SphereGeometry(13, 28, 12, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 0.8, 1).translate(dx, 3, dz));
+  domeG.push(new THREE.CylinderGeometry(13.2, 13.2, 3 - DEEP, 28).translate(dx, (3 + DEEP) / 2, dz));
+  solid.push([dx, dz, 16]);
+  { const [x, z, a] = out(3, 0.52, 12); building(x, z, a, 16, 7, 5.5, 2.6); }   // its entrance hall
+  { const [x, z, a] = out(1, 0.55, 11); building(x, z, a, 44, 10, 6, 3.4); }    // long pavilion along the east side
+  { const [x, z, a] = out(0, 0.25, 12); building(x, z, a, 26, 10, 5.5, 3); }    // north side
+  { const [x, z, a] = out(0, 0.72, 13); building(x, z, a, 22, 11, 6.5, 3.2); }
+  { const [x, z, a] = out(2, 0.3, 12); building(x, z, a, 24, 9, 5.5, 3); }      // south side
+  { const [x, z, a] = out(2, 0.75, 14); building(x, z, a, 18, 10, 6, 3); }
+  // coconut groves
+  let n = 0;
+  M.EDGES.forEach((e, edge) => {
+    for (let s = 3; s < e.len; s += 3.2) {
+      n++;
+      const dist = 6 + M.noise2(n * 1.31, 7, 61) * 34;
+      const [x, z] = out(edge, (s + (M.noise2(n * 0.77, 2, 62) - 0.5) * 3) / e.len, dist);
+      if (solid.some(([bx, bz, r]) => Math.hypot(x - bx, z - bz) < r)) continue;
+      palm(trunks, leaves, x, z, DEEP, 6 + M.noise2(n * 2.1, 4, 63) * 5);
+    }
+  });
+  // drawn after the yard (renderOrder), so pixels hidden behind the wall are skipped instead of drawn twice
+  const far = (mesh, order = 3) => { mesh.renderOrder = order; scene.add(mesh); };
+  far(merged(wallsG, new THREE.MeshLambertMaterial({ map: plasterTex, color: 0xfff1dc })));
+  far(merged(roofsG, new THREE.MeshLambertMaterial({ map: tileTex, flatShading: true })));
+  far(merged(domeG, new THREE.MeshLambertMaterial({ color: 0xc46a3c })));
+  far(merged(trunks, new THREE.MeshLambertMaterial({ color: 0x6b5a48 })));
+  far(merged(leaves, new THREE.MeshLambertMaterial({ color: 0x4a7a30, flatShading: true, side: THREE.DoubleSide })));
+  // the Velliangiri hills on the horizon
+  const hills = [];
+  for (let k = 0; k < 14; k++) {
+    const a = (k / 14) * Math.PI * 2 + 0.3, r = 600 + M.noise2(k, 5, 71) * 100, h = 70 + M.noise2(k, 8, 72) * 90;
+    hills.push(new THREE.ConeGeometry(300 + M.noise2(k, 3, 73) * 140, h, 14, 1).translate(Math.cos(a) * r, h / 2 - 25, Math.sin(a) * r));
+  }
+  far(merged(hills, new THREE.MeshBasicMaterial({ color: 0x6d8f86, fog: false })), 4);
+}
+
+// The Nandi, taken from the Isha Vayu Racers project: its body parts are ellipsoids fused into one smooth
+// sculpted surface (marching cubes), plus horns, tail, brass neck rings and bells.
+// Returned facing -x, with the origin at the middle of its base.
 function nandiGeometry() {
-  const part = (sx, sy, sz, x, y, z, rz = 0) => new THREE.SphereGeometry(1, 16, 12).scale(sx, sy, sz).rotateZ(rz).translate(x, y, z);
-  const body = [
-    part(3.3, 1.45, 1.6, 0.3, 1.4, 0),            // body
-    part(0.95, 0.85, 0.85, -1.6, 2.75, 0),        // hump
-    part(1.0, 1.35, 0.9, -2.55, 2.3, 0, 0.35),    // neck
-    part(0.85, 0.7, 0.62, -3.3, 3.05, 0, -0.3),   // head
-    part(0.6, 0.45, 0.46, -3.95, 2.72, 0, -0.3),  // snout
-    part(1.3, 1.1, 0.55, 2.0, 1.0, 1.3), part(1.3, 1.1, 0.55, 2.0, 1.0, -1.3),         // haunches
-    part(1.15, 0.3, 0.32, -2.5, 0.3, 0.95), part(1.15, 0.3, 0.32, -2.5, 0.3, -0.95),   // folded front legs
-    part(0.9, 0.28, 0.3, 1.6, 0.28, 1.75), part(0.9, 0.28, 0.3, 1.6, 0.28, -1.75),     // hind legs
-    part(0.12, 0.2, 0.42, -3.0, 3.2, 0.78), part(0.12, 0.2, 0.42, -3.0, 3.2, -0.78),   // ears
-    part(0.13, 0.95, 0.13, 3.5, 1.25, 0.35),      // tail
-  ];
-  for (const s of [-1, 1]) body.push(new THREE.ConeGeometry(0.15, 0.85, 8).rotateX(s * 0.3).translate(-3.1, 3.95, s * 0.42)); // horns
-  const gold = [new THREE.TorusGeometry(1.08, 0.09, 6, 20).rotateY(Math.PI / 2).rotateZ(0.35).translate(-2.5, 2.05, 0)]; // bell garland
-  for (let i = 0; i < 7; i++) { const a = Math.PI * (0.15 + (0.7 * i) / 6); gold.push(part(0.14, 0.17, 0.14, -2.2 - Math.cos(a - Math.PI / 2) * 0.0, 2.05 - Math.sin(a) * 1.08 - 0.12, Math.cos(a) * 1.08)); }
-  gold.push(part(0.1, 0.22, 0.3, -4.05, 3.3, 0));            // forehead ornament
-  gold.push(part(3.34, 0.5, 0.75, 0.3, 2.4, 0));             // cloth over the back
-  const one = (list) => mergeGeometries(list.map((g) => (g.index ? g.toNonIndexed() : g)));
-  return { body: one(body), gold: one(gold) };
+  const forms = [];
+  const ell = (x, y, z, sx, sy, sz, rz = 0) => forms.push({ x, y, z, sx, sy, sz, rz });
+  ell(0, 2.1, -0.9, 1.75, 1.35, 2.9); ell(0, 3.15, 1.1, 1.25, 1.85, 1.35); ell(0, 4.15, 2.25, 1, 1.4, 1.1); ell(0, 3.65, 3.35, 1, 0.65, 0.75);
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const parts = [], gold = [];
+  for (const side of [-1, 1]) {
+    ell(side * 1.6, 1.05, 1.65, 0.55, 0.48, 1.9); ell(side * 1.7, 1.05, -2.15, 0.65, 0.5, 1.7);   // folded legs
+    ell(side * 1.18, 4.4, 2.3, 0.85, 0.26, 0.5, side * 0.3);                                       // ears
+    const horn = new THREE.CatmullRomCurve3([V(side * 0.7, 5.05, 2), V(side * 1.05, 5.8, 1.85), V(side * 0.82, 6.3, 1.7)]);
+    parts.push(new THREE.TubeGeometry(horn, 12, 0.15, 8));
+  }
+  parts.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([V(0, 2, -4), V(1, 1.2, -4.6), V(2, 0.9, -3.5)]), 16, 0.1, 6)); // tail
+  // fuse the ellipsoids into one continuous surface
+  const res = 42, mc = new MarchingCubes(res, new THREE.MeshBasicMaterial(), false, false, 40000);
+  mc.isolation = 0;
+  const smin = (p, q, k = 0.38) => { const h = Math.max(0, Math.min(1, 0.5 + (0.5 * (q - p)) / k)); return q + (p - q) * h - k * h * (1 - h); };
+  for (let iz = 0; iz < res; iz++) for (let iy = 0; iy < res; iy++) for (let ix = 0; ix < res; ix++) {
+    const x = (ix / res - 0.5) * 12, y = (iy / res - 0.5) * 12 + 3, z = (iz / res - 0.5) * 12;
+    let dist = 100;
+    for (const fm of forms) {
+      const dx = x - fm.x, dy = y - fm.y, dz = z - fm.z, c = Math.cos(-fm.rz), sn = Math.sin(-fm.rz);
+      const rx = dx * c - dy * sn, ry = dx * sn + dy * c;
+      const q = Math.sqrt((rx / fm.sx) ** 2 + (ry / fm.sy) ** 2 + (dz / fm.sz) ** 2) - 1;
+      dist = smin(dist, q * Math.min(fm.sx, fm.sy, fm.sz));
+    }
+    mc.field[iz * res * res + iy * res + ix] = -dist;
+  }
+  mc.update();
+  const count = mc.geometry.drawRange.count, baked = new THREE.BufferGeometry();
+  for (const name of ['position', 'normal']) baked.setAttribute(name, new THREE.BufferAttribute(mc.geometry.attributes[name].array.slice(0, count * 3), 3));
+  baked.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(count * 2), 2));
+  mc.geometry.dispose();
+  parts.push(baked.scale(6, 6, 6).translate(0, 3, 0));
+  for (const z of [1, 1.2, 1.4]) gold.push(new THREE.TorusGeometry(1.15, 0.05, 5, 22).rotateX(0.35).translate(0, 3, z)); // neck rings
+  for (let i = 0; i < 11; i++) { const an = Math.PI * 0.08 + (i / 10) * Math.PI * 0.84; gold.push(new THREE.SphereGeometry(0.13, 6, 4).translate(Math.cos(an) * 1.3, 3 - Math.sin(an), 2)); } // bells
+  const one = (list) => {
+    const g = mergeGeometries(list.map((x) => { const n = x.index ? x.toNonIndexed() : x; for (const k of Object.keys(n.attributes)) if (!['position', 'normal', 'uv'].includes(k)) n.deleteAttribute(k); return n; }));
+    return g.translate(0, -0.55, 0).scale(0.78, 0.78, 0.78).rotateY(-Math.PI / 2); // sit on the platform, face west
+  };
+  return { body: one(parts), gold: one(gold) };
 }
 
 function rockGeometry(w, h, d, seed) {
@@ -321,50 +411,66 @@ function arrowIcon(type) {
   return t;
 }
 
+// All pickups are drawn in a handful of calls: one instanced mesh for the rings, one per type for the
+// floating cans, and a small icon only on the (rarer) air-dash ones.
 class PickupVisuals {
   constructor(scene) {
     this.items = new Map();
-    const ringG = new THREE.TorusGeometry(0.62, 0.05, 6, 32);
+    this.col = new THREE.Color();
+    this.m4 = new THREE.Matrix4();
+    this.q = new THREE.Quaternion();
+    this.v = new THREE.Vector3();
+    this.one = new THREE.Vector3(1, 1, 1);
+    this.zero = new THREE.Vector3(0, 0, 0);
+    this.up = new THREE.Vector3(0, 1, 0);
+    const ringG = new THREE.TorusGeometry(0.62, 0.05, 4, 20);
     ringG.rotateX(Math.PI / 2);
-    const canG = new THREE.CylinderGeometry(0.18, 0.18, 0.5, 12);
-    const canMat = {
-      L: new THREE.MeshBasicMaterial({ color: PICKUP_HEX.L, toneMapped: false }),
-      P: new THREE.MeshBasicMaterial({ color: PICKUP_HEX.P, toneMapped: false }),
-      D: new THREE.MeshBasicMaterial({ color: PICKUP_HEX.D, toneMapped: false }),
-    };
-    const icons = { L: arrowIcon('L'), P: arrowIcon('P'), D: arrowIcon('D') };
+    this.rings = new THREE.InstancedMesh(ringG, new THREE.MeshBasicMaterial({ toneMapped: false }), M.PICKUPS.length);
+    this.rings.frustumCulled = false;
+    scene.add(this.rings);
+    const canG = new THREE.CylinderGeometry(0.18, 0.18, 0.5, 8);
+    this.cans = {};
+    for (const type of ['L', 'P', 'D']) {
+      const n = M.PICKUPS.filter((p) => p.type === type).length;
+      const im = new THREE.InstancedMesh(canG, new THREE.MeshBasicMaterial({ color: PICKUP_HEX[type], toneMapped: false }), n);
+      im.frustumCulled = false;
+      im.userData.n = 0;
+      scene.add(im);
+      this.cans[type] = im;
+    }
+    const dIcon = arrowIcon('D');
+    let ri = 0;
     for (const p of M.PICKUPS) {
-      const g = new THREE.Group();
-      g.position.set(p.x, M.heightAt(p.x, p.z), p.z);
-      const ringMat = new THREE.MeshBasicMaterial({ color: PICKUP_HEX[p.type], toneMapped: false });
-      const ring = new THREE.Mesh(ringG, ringMat);
-      ring.position.y = 0.08;
-      g.add(ring);
-      const can = new THREE.Group();
-      can.add(new THREE.Mesh(canG, canMat[p.type]));
-      const icon = new THREE.Sprite(new THREE.SpriteMaterial({ map: icons[p.type], transparent: true, depthWrite: false }));
-      icon.scale.setScalar(p.type === 'D' ? 0.7 : 0.4);
-      icon.position.y = 0.6;
-      can.add(icon);
-      can.position.y = 0.9;
-      g.add(can);
-      scene.add(g);
-      this.items.set(p.id, { ...p, group: g, can, ringMat, active: true, phase: p.id * 1.7 });
+      const y = M.heightAt(p.x, p.z);
+      this.rings.setMatrixAt(ri, this.m4.makeTranslation(p.x, y + 0.08, p.z));
+      this.rings.setColorAt(ri, this.col.set(PICKUP_HEX[p.type]));
+      let icon = null;
+      if (p.type === 'D') {
+        icon = new THREE.Sprite(new THREE.SpriteMaterial({ map: dIcon, transparent: true, depthWrite: false }));
+        icon.scale.setScalar(0.7);
+        icon.position.set(p.x, y + 1.5, p.z);
+        scene.add(icon);
+      }
+      this.items.set(p.id, { ...p, group: { position: new THREE.Vector3(p.x, y, p.z) }, icon, ring: ri++, can: this.cans[p.type].userData.n++, active: true, phase: p.id * 1.7 });
     }
   }
   setActive(id, a) {
     const it = this.items.get(id);
     if (!it) return;
     it.active = a;
-    it.can.visible = a;
-    it.ringMat.color.set(a ? PICKUP_HEX[it.type] : 0x333333);
+    if (it.icon) it.icon.visible = a;
+    this.rings.setColorAt(it.ring, this.col.set(a ? PICKUP_HEX[it.type] : 0x333333));
+    this.rings.instanceColor.needsUpdate = true;
   }
   setAll(list) { for (const p of list) this.setActive(p.id, p.active); }
   update(t) {
     for (const it of this.items.values()) {
-      if (!it.active) continue;
-      it.can.rotation.y = t * 1.6 + it.phase;
-      it.can.position.y = 0.9 + Math.sin(t * 2.2 + it.phase) * 0.08;
+      const g = it.group.position, im = this.cans[it.type];
+      // a taken pickup's can is shrunk to nothing until it comes back
+      this.q.setFromAxisAngle(this.up, t * 1.6 + it.phase);
+      this.v.set(g.x, g.y + 0.9 + Math.sin(t * 2.2 + it.phase) * 0.08, g.z);
+      im.setMatrixAt(it.can, this.m4.compose(this.v, this.q, it.active ? this.one : this.zero));
     }
+    for (const type of ['L', 'P', 'D']) this.cans[type].instanceMatrix.needsUpdate = true;
   }
 }

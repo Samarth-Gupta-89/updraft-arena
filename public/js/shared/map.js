@@ -23,12 +23,19 @@ export const WATER_LEVEL = -0.6;
 export const KILL_Y = -14;
 // crouched players (C key) are short enough to hide behind the low walls
 export const PLAYER = { radius: 0.4, height: 2.25, eye: 2.0, crouchHeight: 1.5, crouchEye: 1.3, crouchHitbox: 1.55, hitHeight: 2.4, hitHalf: 1.1 };
-// two looks: 'egg' (wide cartoon egg) and 'human' (normal-sized person). The target box and eye height match the look.
+// two looks: 'egg' (wide cartoon egg) and 'human' (a person, drawn 1.5x life size). The target box and eye height match the look.
 export const BODY = {
-  egg: { half: PLAYER.hitHalf, h: PLAYER.hitHeight, crouchH: PLAYER.crouchHitbox, eye: PLAYER.eye, crouchEye: PLAYER.crouchEye },
-  human: { half: 0.5, h: 1.85, crouchH: 1.3, eye: 1.62, crouchEye: 1.05 },
+  egg: { half: PLAYER.hitHalf, h: PLAYER.hitHeight, crouchH: PLAYER.crouchHitbox, eye: PLAYER.eye, crouchEye: PLAYER.crouchEye, head: 1.75, crouchHead: 1.12 },
+  human: { half: 0.98, h: 3.61, crouchH: 2.54, eye: 3.16, crouchEye: 2.05, head: 2.86, crouchHead: 2.0 }, // drawn 1.95x life size
 };
 export const bodyOf = (look) => BODY[look === 'human' ? 'human' : 'egg'];
+// Headshot: a shot that lands this high above the target's feet (the head / the egg's face and up) counts double.
+// A LIFTER headshot throws them twice as high; a SHOVER headshot knocks them back twice as fast.
+export const headFrom = (look, crouched) => (crouched ? bodyOf(look).crouchHead : bodyOf(look).head);
+export const HEADSHOT_MULT = 2;
+// Charged shot (SHOVER only): hold the right button for `ms`, then release. It uses `cost` ammo and knocks back
+// `mult` times as fast. A charged headshot stacks, but never beyond maxMult.
+export const CHARGE = { ms: 700, cost: 5, mult: 2, maxMult: 3 };
 
 export const MAX_AMMO = 30;
 export const PICKUP_AMOUNT = 15;
@@ -39,6 +46,12 @@ export const maxOf = (type) => (type === 'D' ? DASH.max : MAX_AMMO);
 export const giveOf = (type) => (type === 'D' ? DASH.give : PICKUP_AMOUNT);
 export const fullAmmo = () => ({ L: MAX_AMMO, P: MAX_AMMO, D: 0 });
 export const PICKUP_NAME = { L: 'LIFTER AMMO', P: 'SHOVER AMMO', D: 'AIR DASH' };
+// Shield (hold F): stops shots that come at your front. Every blocked shot uses 1 charge; at 0 it breaks.
+// It refills 1 charge every regenMs while lowered, and a broken shield needs minToRaise charges before it works again.
+// Shots from behind always get through, and the SHOVER cannot be fired while the shield is up.
+export const SHIELD = { max: 10, regenMs: 1500, minToRaise: 3 };
+// yaw: where the shielded player faces; d: direction the shot is travelling. True = it meets the shield.
+export const shieldBlocks = (yaw, d) => -Math.sin(yaw) * d[0] - Math.cos(yaw) * d[2] < 0;
 export const PICKUP_RESPAWN_MS = 12000;
 export const PICKUP_RADIUS = 1.6;
 

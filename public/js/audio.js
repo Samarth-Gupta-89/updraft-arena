@@ -234,6 +234,12 @@ export class Sfx {
     this.tone(d, 'sawtooth', 180, 520, 0.22, 0.12);
   }
 
+  block() {
+    if (!this.ctx) return;
+    const d = this.out(null, 0.6);
+    this.tone(d, 'square', 900, 320, 0.09, 0.1);
+  }
+
   empty() {
     if (!this.ctx || this.play('sfx/empty', null, 0.6)) return;
     this.burst(this.out(null, 0.5), 'highpass', 3000, 3000, 0.03, 0.3, 1);
